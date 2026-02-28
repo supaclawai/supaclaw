@@ -49,6 +49,19 @@ class MLXViewModel {
     /// Any error message occured while the generate process.
     var errorMessage: String?
 
+    struct ConversationMessage {
+        enum Role: String {
+            case user
+            case assistant
+        }
+
+        let role: Role
+        let text: String
+    }
+
+    private let telegramHistoryLimit = 15
+    private var telegramConversationHistory: [ConversationMessage] = []
+
     init(modelConfiguration: ModelConfiguration) {
         self.modelConfiguration = modelConfiguration
     }
@@ -105,7 +118,7 @@ class MLXViewModel {
     }
 
     /// Generates language model output. It will set ``output`` property.
-    func generate(prompt: String, images: [Data] = []) async {
+    func generate(prompt: String, images: [Data] = [], parameters: GenerateParameters = .init()) async {
         isRunning = true
         defer { isRunning = false }
 
@@ -130,7 +143,7 @@ class MLXViewModel {
                 let input = try await context.processor.prepare(input: userInput)
 
                 // Generate output
-                return try MLXLMCommon.generate(input: input, parameters: .init(), context: context) { tokens in
+                return try MLXLMCommon.generate(input: input, parameters: parameters, context: context) { tokens in
                     let text = context.tokenizer.decode(tokens: tokens)
 
                     Task { @MainActor in
@@ -153,6 +166,71 @@ class MLXViewModel {
             logError(error, context: "generate")
             errorMessage = nil
         }
+    }
+
+    func generateTelegramReply(incomingText: String, imageData: Data?) async {
+        let normalized = incomingText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty || imageData != nil else {
+            return
+        }
+
+        if isRunning {
+            print("[MLXSampleApp] Telegram event dropped because generation is already running")
+            return
+        }
+
+        appendTelegramHistory(role: .user, text: normalized.isEmpty ? "<image>" : normalized)
+        let contextualPrompt = telegramPrompt(for: normalized)
+        let images = imageData.map { [$0] } ?? []
+        print("[MLXSampleApp] Telegram generation start promptLen=\(contextualPrompt.count) hasImage=\(imageData != nil)")
+        await generate(
+            prompt: contextualPrompt,
+            images: images,
+            parameters: .init(temperature: 0.6, topP: 0.95)
+        )
+
+        let finalOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if finalOutput.isEmpty {
+            let fallbackPrompt = "Reply briefly to this private Telegram message:\n\(normalized)"
+            print("[MLXSampleApp] Telegram generation empty on contextual prompt, retrying with fallback prompt")
+            await generate(
+                prompt: fallbackPrompt,
+                images: [],
+                parameters: .init(temperature: 0.7, topP: 0.95)
+            )
+        }
+
+        let finalOrFallbackOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !finalOrFallbackOutput.isEmpty {
+            appendTelegramHistory(role: .assistant, text: finalOrFallbackOutput)
+            print("[MLXSampleApp] Telegram generation done outputLen=\(finalOrFallbackOutput.count)")
+        } else {
+            print("[MLXSampleApp] Telegram generation completed with empty output after fallback")
+        }
+    }
+
+    private func appendTelegramHistory(role: ConversationMessage.Role, text: String) {
+        guard !text.isEmpty else { return }
+        telegramConversationHistory.append(.init(role: role, text: text))
+        if telegramConversationHistory.count > telegramHistoryLimit {
+            telegramConversationHistory = Array(telegramConversationHistory.suffix(telegramHistoryLimit))
+        }
+    }
+
+    private func telegramPrompt(for incomingText: String) -> String {
+        let historyBlock = telegramConversationHistory.map { entry in
+            "\(entry.role.rawValue): \(entry.text)"
+        }.joined(separator: "\n")
+
+        return """
+        You are drafting a reply for a private Telegram conversation.
+        Keep the response concise and useful.
+
+        Conversation history:
+        \(historyBlock)
+
+        Draft the assistant's next reply:
+        """
     }
 
     /// Creates ``UserInput.Prompt`` from prompt string and images
