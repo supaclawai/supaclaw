@@ -42,10 +42,27 @@ struct ContentView: View {
     @State private var photoSelection: PhotosPickerItem?
     @State private var generationTask: Task<Void, Never>?
     @State private var telegramBridge: TelegramTDLibBridge?
+    @State private var useMockToolMode: Bool = false
 
     var body: some View {
         NavigationStack {
             VStack {
+                HStack {
+                    Text("Tool Mode")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Toggle(isOn: $useMockToolMode) {
+                        Text(useMockToolMode ? "Mock" : "LLM")
+                            .font(.caption)
+                    }
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    Text(useMockToolMode ? "Mock" : "LLM")
+                        .font(.caption)
+                        .foregroundStyle(useMockToolMode ? .orange : .green)
+                }
+
 #if os(iOS)
                 if let telegramBridge {
                     VStack(alignment: .leading, spacing: 8) {
@@ -227,6 +244,9 @@ struct ContentView: View {
             .onChange(of: vm.output) { _, newText in
                 voiceManager.consumeOutputText(newText)
             }
+            .onChange(of: useMockToolMode) { _, isMock in
+                telegramBridge?.toolDecisionMode = isMock ? .mock : .llm
+            }
         }
     }
 
@@ -249,13 +269,21 @@ struct ContentView: View {
     private func ensureTelegramBridge() {
         guard telegramBridge == nil else { return }
 
-        let bridge = TelegramTDLibBridge { text, imageData in
-            await vm.generateTelegramReply(incomingText: text, imageData: imageData)
+        let bridge = TelegramTDLibBridge { chatId, messageId, text, imageData, runtime, mode in
+            await vm.handleTelegramMessageWithTools(
+                chatId: chatId,
+                incomingMessageId: messageId,
+                incomingText: text,
+                imageData: imageData,
+                runtime: runtime,
+                mode: mode
+            )
         }
 
         bridge.apiIdText = UserDefaults.standard.string(forKey: "telegram.api_id") ?? Self.defaultTelegramApiId
         bridge.apiHash = UserDefaults.standard.string(forKey: "telegram.api_hash") ?? Self.defaultTelegramApiHash
         bridge.phoneNumber = UserDefaults.standard.string(forKey: "telegram.phone") ?? ""
+        bridge.toolDecisionMode = useMockToolMode ? .mock : .llm
         telegramBridge = bridge
     }
 

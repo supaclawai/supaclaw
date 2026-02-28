@@ -12,6 +12,19 @@ import MLXVLM
 import MLXLMCommon
 import CoreImage
 
+protocol TelegramToolRuntime: AnyObject {
+    func tlgMessageResponse(chatId: Int64, text: String) async -> String
+    func forwardMessageToUser(chatId: Int64, text: String) async -> String
+    func getUserLocation() async -> String
+    func expandChatContext(chatId: Int64, fromMessageId: Int64, limit: Int) async -> String
+    func elaborateRequestToUser(chatId: Int64, text: String) async -> String
+}
+
+enum TelegramToolDecisionMode: String {
+    case llm
+    case mock
+}
+
 @MainActor
 @Observable
 class MLXViewModel {
@@ -61,6 +74,7 @@ class MLXViewModel {
 
     private let telegramHistoryLimit = 15
     private var telegramConversationHistory: [ConversationMessage] = []
+    private let maxToolRounds = 4
 
     init(modelConfiguration: ModelConfiguration) {
         self.modelConfiguration = modelConfiguration
@@ -209,6 +223,283 @@ class MLXViewModel {
         }
     }
 
+    func handleTelegramMessageWithTools(
+        chatId: Int64,
+        incomingMessageId: Int64,
+        incomingText: String,
+        imageData: Data?,
+        runtime: any TelegramToolRuntime,
+        mode: TelegramToolDecisionMode
+    ) async {
+        let normalized = incomingText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty || imageData != nil else { return }
+
+        if isRunning {
+            print("[MLXSampleApp] Telegram tool pipeline skipped because generation is already running")
+            return
+        }
+
+        if mode == .mock {
+            await runMockToolPipeline(
+                chatId: chatId,
+                incomingMessageId: incomingMessageId,
+                incomingText: normalized,
+                runtime: runtime
+            )
+            return
+        }
+
+        appendTelegramHistory(role: .user, text: normalized.isEmpty ? "<image>" : normalized)
+        var toolTrace: [String] = []
+        var fallbackFinalText = ""
+
+        for round in 1...maxToolRounds {
+            let plannerPrompt = toolPlannerPrompt(
+                incomingText: normalized,
+                round: round,
+                toolTrace: toolTrace
+            )
+
+            let modelOutput = await generateText(
+                prompt: plannerPrompt,
+                images: (round == 1 ? (imageData.map { [$0] } ?? []) : []),
+                parameters: .init(temperature: 0.4, topP: 0.95)
+            )
+
+            let trimmed = modelOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+
+            if let toolCall = parseToolCall(from: trimmed) {
+                let toolResult = await runToolCall(
+                    toolCall,
+                    chatId: chatId,
+                    incomingMessageId: incomingMessageId,
+                    runtime: runtime
+                )
+                toolTrace.append("tool=\(toolCall.tool) result=\(toolResult)")
+                print("[MLXSampleApp] Tool call executed \(toolCall.tool) -> \(toolResult)")
+                continue
+            }
+
+            fallbackFinalText = sanitizeFinalModelText(trimmed)
+            if !fallbackFinalText.isEmpty {
+                let sendResult = await runtime.tlgMessageResponse(chatId: chatId, text: fallbackFinalText)
+                output = "final_reply_sent(\(sendResult))\n\(fallbackFinalText)"
+                appendTelegramHistory(role: .assistant, text: fallbackFinalText)
+                return
+            }
+        }
+
+        if fallbackFinalText.isEmpty {
+            let fallbackPrompt = "Reply briefly to this private Telegram message:\n\(normalized)"
+            let fallback = await generateText(
+                prompt: fallbackPrompt,
+                images: [],
+                parameters: .init(temperature: 0.7, topP: 0.95)
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if !fallback.isEmpty {
+                let sendResult = await runtime.tlgMessageResponse(chatId: chatId, text: fallback)
+                output = "fallback_reply_sent(\(sendResult))\n\(fallback)"
+                appendTelegramHistory(role: .assistant, text: fallback)
+            }
+        }
+    }
+
+    private func runMockToolPipeline(
+        chatId: Int64,
+        incomingMessageId: Int64,
+        incomingText: String,
+        runtime: any TelegramToolRuntime
+    ) async {
+        let calls = mockToolCalls(from: incomingText)
+        guard !calls.isEmpty else {
+            output = "Mock mode active. Send command like: mock:get_user_location or mock:tlg_message_response hello"
+            return
+        }
+
+        var results: [String] = []
+        for call in calls {
+            let result = await runToolCall(
+                call,
+                chatId: chatId,
+                incomingMessageId: incomingMessageId,
+                runtime: runtime
+            )
+            results.append("\(call.tool) => \(result)")
+
+            // Mock E2E loop: simulate a follow-up LLM decision to answer in Telegram
+            // based on the returned tool result.
+            if call.tool == "get_user_location", !result.lowercased().hasPrefix("fail") {
+                let followUp = ParsedToolCall(
+                    tool: "tlg_message_response",
+                    arguments: ["text": "Your current location is: \(result)"]
+                )
+                let followUpResult = await runToolCall(
+                    followUp,
+                    chatId: chatId,
+                    incomingMessageId: incomingMessageId,
+                    runtime: runtime
+                )
+                results.append("tlg_message_response => \(followUpResult)")
+            }
+
+            if call.tool == "forward_message_to_user",
+               let userReply = extractUserResponse(from: result) {
+                output = userReply
+                let followUp = ParsedToolCall(
+                    tool: "tlg_message_response",
+                    arguments: ["text": "Thanks, got your response: \(userReply)"]
+                )
+                let followUpResult = await runToolCall(
+                    followUp,
+                    chatId: chatId,
+                    incomingMessageId: incomingMessageId,
+                    runtime: runtime
+                )
+                results.append("tlg_message_response => \(followUpResult)")
+            }
+        }
+
+        if !results.isEmpty {
+            output += (output.isEmpty ? "" : "\n\n") + results.joined(separator: "\n")
+        }
+        appendTelegramHistory(role: .assistant, text: output)
+    }
+
+    private func extractUserResponse(from toolResult: String) -> String? {
+        let prefix = "user_response("
+        guard toolResult.hasPrefix(prefix), toolResult.hasSuffix(")") else { return nil }
+        let start = toolResult.index(toolResult.startIndex, offsetBy: prefix.count)
+        let end = toolResult.index(before: toolResult.endIndex)
+        return String(toolResult[start..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func mockToolCalls(from text: String) -> [ParsedToolCall] {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+
+        if lower.hasPrefix("mock:tlg_message_response ") {
+            let payload = String(trimmed.dropFirst("mock:tlg_message_response ".count))
+            return [.init(tool: "tlg_message_response", arguments: ["text": payload])]
+        }
+
+        if lower.hasPrefix("mock:forward_message_to_user ") {
+            let payload = String(trimmed.dropFirst("mock:forward_message_to_user ".count))
+            return [.init(tool: "forward_message_to_user", arguments: ["text": payload])]
+        }
+
+        if lower == "mock:get_user_location" {
+            return [.init(tool: "get_user_location", arguments: [:])]
+        }
+
+        if lower.hasPrefix("mock:expand_chat_context") {
+            let limit = trimmed.split(separator: " ").last.map(String.init) ?? "15"
+            return [.init(tool: "expand_chat_context", arguments: ["limit": limit])]
+        }
+
+        if lower.hasPrefix("mock:elaborate_request_to_user ") {
+            let payload = String(trimmed.dropFirst("mock:elaborate_request_to_user ".count))
+            return [.init(tool: "elaborate_request_to_user", arguments: ["text": payload])]
+        }
+
+        return [.init(tool: "tlg_message_response", arguments: ["text": "Mock echo: \(trimmed)"])]
+    }
+
+    private func generateText(
+        prompt: String,
+        images: [Data] = [],
+        parameters: GenerateParameters = .init()
+    ) async -> String {
+        await generate(prompt: prompt, images: images, parameters: parameters)
+        return output
+    }
+
+    private struct ParsedToolCall {
+        let tool: String
+        let arguments: [String: String]
+    }
+
+    private func parseToolCall(from text: String) -> ParsedToolCall? {
+        let candidate: String
+        if let jsonBlock = extractJSONBlock(from: text) {
+            candidate = jsonBlock
+        } else {
+            candidate = text
+        }
+
+        guard let data = candidate.data(using: .utf8) else { return nil }
+        guard let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        guard let tool = raw["tool"] as? String else { return nil }
+
+        var args: [String: String] = [:]
+        if let dict = raw["arguments"] as? [String: Any] {
+            for (key, value) in dict {
+                args[key] = String(describing: value)
+            }
+        }
+
+        return ParsedToolCall(tool: tool, arguments: args)
+    }
+
+    private func extractJSONBlock(from text: String) -> String? {
+        if let start = text.range(of: "```json") {
+            let remainder = text[start.upperBound...]
+            if let end = remainder.range(of: "```") {
+                return String(remainder[..<end.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        guard let first = text.firstIndex(of: "{"), let last = text.lastIndex(of: "}") else { return nil }
+        guard first <= last else { return nil }
+        return String(text[first...last])
+    }
+
+    private func sanitizeFinalModelText(_ text: String) -> String {
+        if text.uppercased().hasPrefix("FINAL:") {
+            return String(text.dropFirst(6)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return text
+    }
+
+    private func runToolCall(
+        _ toolCall: ParsedToolCall,
+        chatId: Int64,
+        incomingMessageId: Int64,
+        runtime: any TelegramToolRuntime
+    ) async -> String {
+        switch toolCall.tool {
+        case "tlg_message_response":
+            let text = toolCall.arguments["text"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !text.isEmpty else { return "fail: missing text" }
+            return await runtime.tlgMessageResponse(chatId: chatId, text: text)
+
+        case "forward_message_to_user":
+            let text = toolCall.arguments["text"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !text.isEmpty else { return "cancelled: missing text" }
+            return await runtime.forwardMessageToUser(chatId: chatId, text: text)
+
+        case "get_user_location":
+            return await runtime.getUserLocation()
+
+        case "expand_chat_context":
+            let limit = Int(toolCall.arguments["limit"] ?? "") ?? 15
+            return await runtime.expandChatContext(
+                chatId: chatId,
+                fromMessageId: incomingMessageId,
+                limit: max(1, min(limit, 50))
+            )
+
+        case "elaborate_request_to_user":
+            let text = toolCall.arguments["text"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !text.isEmpty else { return "cancelled: missing text" }
+            return await runtime.elaborateRequestToUser(chatId: chatId, text: text)
+
+        default:
+            return "fail: unsupported tool \(toolCall.tool)"
+        }
+    }
+
     private func appendTelegramHistory(role: ConversationMessage.Role, text: String) {
         guard !text.isEmpty else { return }
         telegramConversationHistory.append(.init(role: role, text: text))
@@ -230,6 +521,48 @@ class MLXViewModel {
         \(historyBlock)
 
         Draft the assistant's next reply:
+        """
+    }
+
+    private func toolPlannerPrompt(incomingText: String, round: Int, toolTrace: [String]) -> String {
+        let historyBlock = telegramConversationHistory.map { entry in
+            "\(entry.role.rawValue): \(entry.text)"
+        }.joined(separator: "\n")
+
+        let toolTraceBlock = toolTrace.isEmpty ? "none" : toolTrace.joined(separator: "\n")
+
+        return """
+        You are handling a private Telegram chat with tool calling.
+        Round \(round) of \(maxToolRounds).
+
+        Operating rules:
+        - This input came from a Telegram private chat user.
+        - If you need to reply to the user, you MUST call `tlg_message_response`.
+        - Don't treat local app output as a user-visible Telegram reply.
+        - Use `forward_message_to_user` only when clarification is needed and a user response is required before finalizing.
+        - Use `expand_chat_context` when context is insufficient.
+        - Use `get_user_location` only when location is directly required.
+        - Use `elaborate_request_to_user` when the user says they don't understand.
+        - `FINAL:` is only for internal fallback/debug and should be avoided for normal chat replies.
+
+        Available tools (return ONLY JSON with `tool` and `arguments`):
+        1) tlg_message_response { "text": "..." } -> send response in current chat
+        2) forward_message_to_user { "text": "..." } -> ask user to respond and wait; returns dismissed/cancelled/user_response(text)
+        3) get_user_location {} -> returns location text/coordinates
+        4) expand_chat_context { "limit": "15" } -> returns older messages metadata or fail
+        5) elaborate_request_to_user { "text": "..." } -> send clearer rephrased ask to user
+
+        Preferred flow: choose tools until response is sent via `tlg_message_response`.
+        If absolutely needed, return FINAL: <assistant reply text>.
+
+        Conversation history:
+        \(historyBlock)
+
+        Incoming user message:
+        \(incomingText)
+
+        Previous tool results:
+        \(toolTraceBlock)
         """
     }
 

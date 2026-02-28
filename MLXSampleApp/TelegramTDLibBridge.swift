@@ -1,4 +1,7 @@
 import Foundation
+#if os(iOS)
+import CoreLocation
+#endif
 
 #if canImport(TDLibKit)
 import TDLibKit
@@ -6,7 +9,7 @@ import TDLibKit
 
 @MainActor
 @Observable
-final class TelegramTDLibBridge {
+final class TelegramTDLibBridge: TelegramToolRuntime {
     var apiIdText: String = ""
     var apiHash: String = ""
     var phoneNumber: String = ""
@@ -17,15 +20,20 @@ final class TelegramTDLibBridge {
     var isAuthorized: Bool = false
     var statusText: String = "Telegram: disconnected"
     var lastInboundSummary: String = "No inbound message yet"
+    var toolDecisionMode: TelegramToolDecisionMode = .llm
 
-    private let onInboundMessage: @MainActor (_ text: String, _ imageData: Data?) async -> Void
+    private let onInboundMessage: @MainActor (_ chatId: Int64, _ messageId: Int64, _ text: String, _ imageData: Data?, _ runtime: any TelegramToolRuntime, _ mode: TelegramToolDecisionMode) async -> Void
 
 #if canImport(TDLibKit)
     private var manager: TDLibClientManager?
     private var client: TDLibClient?
 #endif
+    private var pendingForwardResponseWaiters: [Int64: CheckedContinuation<String, Never>] = [:]
+#if os(iOS)
+    private let locationProvider = IOSLocationProvider()
+#endif
 
-    init(onInboundMessage: @escaping @MainActor (_ text: String, _ imageData: Data?) async -> Void) {
+    init(onInboundMessage: @escaping @MainActor (_ chatId: Int64, _ messageId: Int64, _ text: String, _ imageData: Data?, _ runtime: any TelegramToolRuntime, _ mode: TelegramToolDecisionMode) async -> Void) {
         self.onInboundMessage = onInboundMessage
     }
 
@@ -59,10 +67,11 @@ final class TelegramTDLibBridge {
         isRunning = false
         isAuthorized = false
         statusText = "Telegram: disconnected"
+        resolveAllPendingForwardWaiters(with: "cancelled")
 
         Task.detached {
             if let activeClient {
-                try? await activeClient.close()
+                _ = try? await activeClient.close()
             }
             activeManager?.closeClients()
         }
@@ -134,6 +143,108 @@ final class TelegramTDLibBridge {
 #endif
     }
 
+    func tlgMessageResponse(chatId: Int64, text: String) async -> String {
+#if canImport(TDLibKit)
+        guard let client else { return "fail: TDLib client unavailable" }
+        let payload = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !payload.isEmpty else { return "fail: empty text" }
+
+        do {
+            _ = try await client.sendMessage(
+                chatId: chatId,
+                inputMessageContent: .inputMessageText(
+                    InputMessageText(
+                        clearDraft: false,
+                        linkPreviewOptions: nil,
+                        text: FormattedText(entities: [], text: payload)
+                    )
+                ),
+                options: nil,
+                replyMarkup: nil,
+                replyTo: nil,
+                topicId: nil
+            )
+            return "success"
+        } catch {
+            return "fail: \(error.localizedDescription)"
+        }
+#else
+        return "fail: TDLibKit unavailable"
+#endif
+    }
+
+    func forwardMessageToUser(chatId: Int64, text: String) async -> String {
+        if toolDecisionMode == .mock {
+            let question = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !question.isEmpty else { return "cancelled" }
+
+            _ = await tlgMessageResponse(chatId: chatId, text: "[Mock tool] Question to user: \(question)")
+            let mockReply = mockUserResponse(for: question)
+            return "user_response(\(mockReply))"
+        }
+
+        let sendResult = await tlgMessageResponse(chatId: chatId, text: text)
+        guard sendResult == "success" else { return sendResult }
+
+        if pendingForwardResponseWaiters[chatId] != nil {
+            return "cancelled"
+        }
+
+        return await withCheckedContinuation { continuation in
+            pendingForwardResponseWaiters[chatId] = continuation
+
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 90 * 1_000_000_000)
+                if let waiter = pendingForwardResponseWaiters.removeValue(forKey: chatId) {
+                    waiter.resume(returning: "dismissed")
+                }
+            }
+        }
+    }
+
+    func getUserLocation() async -> String {
+#if os(iOS)
+        await locationProvider.requestLocationText()
+#else
+        return "fail: location unsupported on this platform"
+#endif
+    }
+
+    func expandChatContext(chatId: Int64, fromMessageId: Int64, limit: Int) async -> String {
+#if canImport(TDLibKit)
+        guard let client else { return "no older messages (fail)" }
+
+        do {
+            let messages = try await client.getChatHistory(
+                chatId: chatId,
+                fromMessageId: fromMessageId,
+                limit: max(1, min(limit, 50)),
+                offset: 1,
+                onlyLocal: false
+            ).messages ?? []
+
+            guard !messages.isEmpty else {
+                return "no older messages (fail)"
+            }
+
+            let lines = messages.prefix(limit).map { formatMessageMetadata($0) }
+            return lines.joined(separator: "\n")
+        } catch {
+            return "no older messages (fail): \(error.localizedDescription)"
+        }
+#else
+        return "no older messages (fail): TDLibKit unavailable"
+#endif
+    }
+
+    func elaborateRequestToUser(chatId: Int64, text: String) async -> String {
+        let payload = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !payload.isEmpty else { return "cancelled" }
+
+        let elaborated = "Let me rephrase clearly:\n\(payload)\n\nPlease reply with the missing details."
+        return await tlgMessageResponse(chatId: chatId, text: elaborated)
+    }
+
 #if canImport(TDLibKit)
     private func handleUpdate(data: Data, client: TDLibClient) async {
         do {
@@ -145,10 +256,22 @@ final class TelegramTDLibBridge {
 
             case .updateNewMessage(let newMessage):
                 if let payload = try await inboundPayload(from: newMessage.message, client: client) {
+                    if let waiter = pendingForwardResponseWaiters.removeValue(forKey: newMessage.message.chatId) {
+                        waiter.resume(returning: "user_response(\(payload.text))")
+                        return
+                    }
+
                     lastInboundSummary = "chat=\(newMessage.message.chatId) len=\(payload.text.count) image=\(payload.imageData != nil)"
                     print("[MLXSampleApp] Telegram inbound accepted \(lastInboundSummary)")
                     Task { @MainActor in
-                        await onInboundMessage(payload.text, payload.imageData)
+                        await onInboundMessage(
+                            newMessage.message.chatId,
+                            newMessage.message.id,
+                            payload.text,
+                            payload.imageData,
+                            self,
+                            toolDecisionMode
+                        )
                     }
                 }
 
@@ -319,5 +442,123 @@ final class TelegramTDLibBridge {
 
         return try Data(contentsOf: URL(fileURLWithPath: path))
     }
+
+    private func formatMessageMetadata(_ message: Message) -> String {
+        let sender: String = message.isOutgoing ? "assistant" : "user"
+        let body: String
+
+        switch message.content {
+        case .messageText(let text):
+            body = text.text.text
+        case .messagePhoto(let photo):
+            let caption = photo.caption.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            body = caption.isEmpty ? "<photo>" : "<photo> \(caption)"
+        default:
+            body = "<unsupported-content>"
+        }
+
+        return "[id:\(message.id) date:\(message.date) sender:\(sender)] \(body)"
+    }
+
+    private func mockUserResponse(for question: String) -> String {
+        let q = question.lowercased()
+        if q.contains("arrive") || q.contains("arrival") || q.contains("eta") {
+            return "it's 15 mins"
+        }
+        if q.contains("where") || q.contains("location") {
+            return "I'm on my way from downtown."
+        }
+        if q.contains("confirm") {
+            return "Yes, confirmed."
+        }
+        return "Got it, I'll reply in 15 mins."
+    }
 #endif
+
+    private func resolveAllPendingForwardWaiters(with result: String) {
+        let waiters = pendingForwardResponseWaiters.values
+        pendingForwardResponseWaiters.removeAll(keepingCapacity: false)
+        for waiter in waiters {
+            waiter.resume(returning: result)
+        }
+    }
 }
+
+#if os(iOS)
+private final class IOSLocationProvider: NSObject, CLLocationManagerDelegate {
+    private let manager = CLLocationManager()
+    private var continuation: CheckedContinuation<String, Never>?
+    private var authorizationContinuation: CheckedContinuation<Bool, Never>?
+
+    override init() {
+        super.init()
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+    }
+
+    @MainActor
+    func requestLocationText() async -> String {
+        let status = manager.authorizationStatus
+
+        if status == .denied || status == .restricted {
+            return "fail: location permission denied"
+        }
+
+        if status == .notDetermined {
+            let granted = await requestAuthorizationIfNeeded()
+            if !granted {
+                return "fail: location permission denied"
+            }
+        }
+
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            manager.requestLocation()
+
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 10 * 1_000_000_000)
+                if let continuation = self.continuation {
+                    self.continuation = nil
+                    continuation.resume(returning: "fail: location timeout")
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func requestAuthorizationIfNeeded() async -> Bool {
+        if manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse {
+            return true
+        }
+
+        return await withCheckedContinuation { continuation in
+            self.authorizationContinuation = continuation
+            manager.requestWhenInUseAuthorization()
+        }
+    }
+
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let location = locations.last, let continuation else { return }
+        self.continuation = nil
+        continuation.resume(returning: "coordinates: \(location.coordinate.latitude),\(location.coordinate.longitude)")
+    }
+
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Swift.Error) {
+        guard let continuation else { return }
+        self.continuation = nil
+        continuation.resume(returning: "fail: \(error.localizedDescription)")
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        guard let continuation = authorizationContinuation else { return }
+        let status = manager.authorizationStatus
+        if status == .authorizedAlways || status == .authorizedWhenInUse {
+            authorizationContinuation = nil
+            continuation.resume(returning: true)
+        } else if status == .denied || status == .restricted {
+            authorizationContinuation = nil
+            continuation.resume(returning: false)
+        }
+    }
+}
+#endif
