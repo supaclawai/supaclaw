@@ -12,6 +12,24 @@ import MLXVLM
 import MLXLMCommon
 import CoreImage
 
+private final class GenerationCancellationFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+
+    func isCancelled() -> Bool {
+        lock.lock()
+        let value = cancelled
+        lock.unlock()
+        return value
+    }
+}
+
 protocol TelegramToolRuntime: AnyObject {
     func tlgMessageResponse(chatId: Int64, text: String) async -> String
     func forwardMessageToUser(chatId: Int64, text: String) async -> String
@@ -28,6 +46,19 @@ enum TelegramToolDecisionMode: String {
 @MainActor
 @Observable
 class MLXViewModel {
+    private enum ToolResultText {
+        static let missingTextError = "error: missing text"
+        static let unsupportedToolPrefix = "error: unsupported tool"
+
+        // Mocked tool results (easy to tune in one place)
+        static let mockLocation = "coordinates: 37.7749,-122.4194"
+        static let mockExpandedContext = """
+        [id:1001 date:1772300000 sender:user] On my way now.
+        [id:1000 date:1772299940 sender:assistant] Share ETA when available.
+        """
+        static let mockElaborateResult = "success: elaborated request sent"
+    }
+
     /// The model configuration. It can be a LLM or VLM
     ///
     /// You can checkout MLXLLM.ModelRegistry or MLXVLM.ModelRegistry
@@ -75,6 +106,7 @@ class MLXViewModel {
     private let telegramHistoryLimit = 15
     private var telegramConversationHistory: [ConversationMessage] = []
     private let maxToolRounds = 4
+    @ObservationIgnored private var activeCancellationFlag: GenerationCancellationFlag?
 
     init(modelConfiguration: ModelConfiguration) {
         self.modelConfiguration = modelConfiguration
@@ -133,8 +165,16 @@ class MLXViewModel {
 
     /// Generates language model output. It will set ``output`` property.
     func generate(prompt: String, images: [Data] = [], parameters: GenerateParameters = .init()) async {
+        let cancellationFlag = GenerationCancellationFlag()
+        activeCancellationFlag = cancellationFlag
+
         isRunning = true
-        defer { isRunning = false }
+        defer {
+            if activeCancellationFlag === cancellationFlag {
+                activeCancellationFlag = nil
+            }
+            isRunning = false
+        }
 
         // Load the model if it hasn't been loaded yet
         if modelContainer == nil {
@@ -164,7 +204,7 @@ class MLXViewModel {
                         output = text
                     }
 
-                    if Task.isCancelled {
+                    if Task.isCancelled || cancellationFlag.isCancelled() {
                         return .stop
                     }
 
@@ -180,6 +220,10 @@ class MLXViewModel {
             logError(error, context: "generate")
             errorMessage = nil
         }
+    }
+
+    func requestStopGeneration() {
+        activeCancellationFlag?.cancel()
     }
 
     func generateTelegramReply(incomingText: String, imageData: Data?) async {
@@ -274,10 +318,17 @@ class MLXViewModel {
                     toolCall,
                     chatId: chatId,
                     incomingMessageId: incomingMessageId,
-                    runtime: runtime
+                    runtime: runtime,
+                    mode: .llm
                 )
                 toolTrace.append("tool=\(toolCall.tool) result=\(toolResult)")
                 print("[MLXSampleApp] Tool call executed \(toolCall.tool) -> \(toolResult)")
+
+                if toolCall.tool == "tlg_message_response" && toolResult == "success" {
+                    output = "final_reply_sent(success)"
+                    appendTelegramHistory(role: .assistant, text: "[sent via tlg_message_response]")
+                    return
+                }
                 continue
             }
 
@@ -314,7 +365,7 @@ class MLXViewModel {
     ) async {
         let calls = mockToolCalls(from: incomingText)
         guard !calls.isEmpty else {
-            output = "Mock mode active. Send command like: mock:get_user_location or mock:tlg_message_response hello"
+            output = "Mode active. Send command like: mock:get_user_location or mock:tlg_message_response hello"
             return
         }
 
@@ -324,7 +375,8 @@ class MLXViewModel {
                 call,
                 chatId: chatId,
                 incomingMessageId: incomingMessageId,
-                runtime: runtime
+                runtime: runtime,
+                mode: .mock
             )
             results.append("\(call.tool) => \(result)")
 
@@ -339,7 +391,8 @@ class MLXViewModel {
                     followUp,
                     chatId: chatId,
                     incomingMessageId: incomingMessageId,
-                    runtime: runtime
+                    runtime: runtime,
+                    mode: .mock
                 )
                 results.append("tlg_message_response => \(followUpResult)")
             }
@@ -355,7 +408,8 @@ class MLXViewModel {
                     followUp,
                     chatId: chatId,
                     incomingMessageId: incomingMessageId,
-                    runtime: runtime
+                    runtime: runtime,
+                    mode: .mock
                 )
                 results.append("tlg_message_response => \(followUpResult)")
             }
@@ -403,7 +457,7 @@ class MLXViewModel {
             return [.init(tool: "elaborate_request_to_user", arguments: ["text": payload])]
         }
 
-        return [.init(tool: "tlg_message_response", arguments: ["text": "Mock echo: \(trimmed)"])]
+        return [.init(tool: "tlg_message_response", arguments: ["text": "Echo: \(trimmed)"])]
     }
 
     private func generateText(
@@ -466,24 +520,31 @@ class MLXViewModel {
         _ toolCall: ParsedToolCall,
         chatId: Int64,
         incomingMessageId: Int64,
-        runtime: any TelegramToolRuntime
+        runtime: any TelegramToolRuntime,
+        mode: TelegramToolDecisionMode
     ) async -> String {
         switch toolCall.tool {
         case "tlg_message_response":
             let text = toolCall.arguments["text"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !text.isEmpty else { return "fail: missing text" }
+            guard !text.isEmpty else { return ToolResultText.missingTextError }
             return await runtime.tlgMessageResponse(chatId: chatId, text: text)
 
         case "forward_message_to_user":
             let text = toolCall.arguments["text"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !text.isEmpty else { return "cancelled: missing text" }
+            guard !text.isEmpty else { return ToolResultText.missingTextError }
             return await runtime.forwardMessageToUser(chatId: chatId, text: text)
 
         case "get_user_location":
+            if mode == .mock {
+                return ToolResultText.mockLocation
+            }
             return await runtime.getUserLocation()
 
         case "expand_chat_context":
             let limit = Int(toolCall.arguments["limit"] ?? "") ?? 15
+            if mode == .mock {
+                return ToolResultText.mockExpandedContext
+            }
             return await runtime.expandChatContext(
                 chatId: chatId,
                 fromMessageId: incomingMessageId,
@@ -492,11 +553,14 @@ class MLXViewModel {
 
         case "elaborate_request_to_user":
             let text = toolCall.arguments["text"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !text.isEmpty else { return "cancelled: missing text" }
+            guard !text.isEmpty else { return ToolResultText.missingTextError }
+            if mode == .mock {
+                return ToolResultText.mockElaborateResult
+            }
             return await runtime.elaborateRequestToUser(chatId: chatId, text: text)
 
         default:
-            return "fail: unsupported tool \(toolCall.tool)"
+            return "\(ToolResultText.unsupportedToolPrefix) \(toolCall.tool)"
         }
     }
 

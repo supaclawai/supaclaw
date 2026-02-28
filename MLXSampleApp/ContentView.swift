@@ -261,6 +261,7 @@ struct ContentView: View {
     }
 
     private func stopGeneration() {
+        vm.requestStopGeneration()
         generationTask?.cancel()
         voiceManager.finishOutputSpeechSession()
         generationTask = nil
@@ -321,6 +322,7 @@ struct ContentView: View {
 #endif
 
     private func reset() {
+        vm.requestStopGeneration()
         generationTask?.cancel()
         generationTask = nil
         voiceManager.resetAll()

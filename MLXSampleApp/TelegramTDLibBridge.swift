@@ -178,7 +178,7 @@ final class TelegramTDLibBridge: TelegramToolRuntime {
             let question = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !question.isEmpty else { return "cancelled" }
 
-            _ = await tlgMessageResponse(chatId: chatId, text: "[Mock tool] Question to user: \(question)")
+            _ = await tlgMessageResponse(chatId: chatId, text: "Question to user: \(question)")
             let mockReply = mockUserResponse(for: question)
             return "user_response(\(mockReply))"
         }
