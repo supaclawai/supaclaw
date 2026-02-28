@@ -11,14 +11,30 @@
 		0FF5DF192D773C9000E882B4 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = 0FF5DF182D773C9000E882B4 /* MLXVLM */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		A1A1A1012E00000100ABC001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 0FA88C342D71E675001EC521 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0FA88C3B2D71E675001EC521;
+			remoteInfo = MLXSampleApp;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		0FA88C3C2D71E675001EC521 /* MLXSampleApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MLXSampleApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1A1A1032E00000100ABC001 /* MLXSampleAppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MLXSampleAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		0FA88C3E2D71E675001EC521 /* MLXSampleApp */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = MLXSampleApp;
+			sourceTree = "<group>";
+		};
+		A1A1A1042E00000100ABC001 /* MLXSampleAppUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = MLXSampleAppUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -33,6 +49,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A1A1A1052E00000100ABC001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -40,6 +63,7 @@
 			isa = PBXGroup;
 			children = (
 				0FA88C3E2D71E675001EC521 /* MLXSampleApp */,
+				A1A1A1042E00000100ABC001 /* MLXSampleAppUITests */,
 				0FF5DF172D773C9000E882B4 /* Frameworks */,
 				0FA88C3D2D71E675001EC521 /* Products */,
 			);
@@ -49,6 +73,7 @@
 			isa = PBXGroup;
 			children = (
 				0FA88C3C2D71E675001EC521 /* MLXSampleApp.app */,
+				A1A1A1032E00000100ABC001 /* MLXSampleAppUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -87,6 +112,29 @@
 			productReference = 0FA88C3C2D71E675001EC521 /* MLXSampleApp.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A1A1A1062E00000100ABC001 /* MLXSampleAppUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1A1A1092E00000100ABC001 /* Build configuration list for PBXNativeTarget "MLXSampleAppUITests" */;
+			buildPhases = (
+				A1A1A1072E00000100ABC001 /* Sources */,
+				A1A1A1052E00000100ABC001 /* Frameworks */,
+				A1A1A1082E00000100ABC001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A1A1A1022E00000100ABC001 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A1A1A1042E00000100ABC001 /* MLXSampleAppUITests */,
+			);
+			name = MLXSampleAppUITests;
+			packageProductDependencies = (
+			);
+			productName = MLXSampleAppUITests;
+			productReference = A1A1A1032E00000100ABC001 /* MLXSampleAppUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -99,6 +147,10 @@
 				TargetAttributes = {
 					0FA88C3B2D71E675001EC521 = {
 						CreatedOnToolsVersion = 16.2;
+					};
+					A1A1A1062E00000100ABC001 = {
+						CreatedOnToolsVersion = 16.2;
+						TestTargetID = 0FA88C3B2D71E675001EC521;
 					};
 				};
 			};
@@ -120,12 +172,20 @@
 			projectRoot = "";
 			targets = (
 				0FA88C3B2D71E675001EC521 /* MLXSampleApp */,
+				A1A1A1062E00000100ABC001 /* MLXSampleAppUITests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		0FA88C3A2D71E675001EC521 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1A1A1082E00000100ABC001 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -142,7 +202,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A1A1A1072E00000100ABC001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A1A1A1022E00000100ABC001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 0FA88C3B2D71E675001EC521 /* MLXSampleApp */;
+			targetProxy = A1A1A1012E00000100ABC001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		0FA88C482D71E677001EC521 /* Debug */ = {
@@ -272,7 +347,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"MLXSampleApp/App/Preview Content\"";
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5KNF7B55U4;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -305,7 +380,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"MLXSampleApp/App/Preview Content\"";
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5KNF7B55U4;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -330,6 +405,38 @@
 			};
 			name = Release;
 		};
+		A1A1A10A2E00000100ABC001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5KNF7B55U4;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.ibrahimcetin.MLXSampleAppUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = MLXSampleApp;
+			};
+			name = Debug;
+		};
+		A1A1A10B2E00000100ABC001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5KNF7B55U4;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.ibrahimcetin.MLXSampleAppUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = MLXSampleApp;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -347,6 +454,15 @@
 			buildConfigurations = (
 				0FA88C4B2D71E677001EC521 /* Debug */,
 				0FA88C4C2D71E677001EC521 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A1A1A1092E00000100ABC001 /* Build configuration list for PBXNativeTarget "MLXSampleAppUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1A1A10A2E00000100ABC001 /* Debug */,
+				A1A1A10B2E00000100ABC001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

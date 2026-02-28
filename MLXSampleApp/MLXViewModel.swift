@@ -53,8 +53,18 @@ class MLXViewModel {
         self.modelConfiguration = modelConfiguration
     }
 
-    /// The hub which changes the default download directory
-    private let hub = HubApi(downloadBase: URL.downloadsDirectory.appending(path: "huggingface"))
+    /// The hub which changes the default download directory.
+    /// On iOS we must use app-sandbox writable storage.
+    private let hub = HubApi(downloadBase: modelDownloadDirectory)
+
+    private static var modelDownloadDirectory: URL {
+#if os(iOS)
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appending(path: "huggingface")
+#else
+        URL.downloadsDirectory.appending(path: "huggingface")
+#endif
+    }
 
     /// Returns appropriate `ModelFactory` for the ``modelConfiguration``
     ///
@@ -89,13 +99,15 @@ class MLXViewModel {
                 }
             }
         } catch {
-            errorMessage = error.localizedDescription
+            logError(error, context: "loadModel")
+            errorMessage = nil
         }
     }
 
     /// Generates language model output. It will set ``output`` property.
     func generate(prompt: String, images: [Data] = []) async {
         isRunning = true
+        defer { isRunning = false }
 
         // Load the model if it hasn't been loaded yet
         if modelContainer == nil {
@@ -125,16 +137,22 @@ class MLXViewModel {
                         output = text
                     }
 
+                    if Task.isCancelled {
+                        return .stop
+                    }
+
                     return .more
                 }
             }
 
             tokensPerSecond = result.tokensPerSecond
         } catch {
-            errorMessage = error.localizedDescription
+            if error is CancellationError {
+                return
+            }
+            logError(error, context: "generate")
+            errorMessage = nil
         }
-        
-        isRunning = false
     }
 
     /// Creates ``UserInput.Prompt`` from prompt string and images
@@ -155,6 +173,19 @@ class MLXViewModel {
             ]
 
             return .messages([message])
+        }
+    }
+
+    private func logError(_ error: any Error, context: String) {
+        print("[MLXSampleApp] ERROR in \(context) for model=\(modelConfiguration.id)")
+        print("[MLXSampleApp] \(String(reflecting: error))")
+
+        var nsError = error as NSError
+        print("[MLXSampleApp] NSError domain=\(nsError.domain) code=\(nsError.code) userInfo=\(nsError.userInfo)")
+
+        while let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+            nsError = underlying
+            print("[MLXSampleApp] Underlying domain=\(nsError.domain) code=\(nsError.code) userInfo=\(nsError.userInfo)")
         }
     }
 }
