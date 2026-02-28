@@ -33,6 +33,7 @@ struct ContentView: View {
 
     @State private var prompt: String = ""
     @State private var selectedImages: [Data] = []
+    @StateObject private var voiceManager = VoiceIOManager()
 
     @State private var showingPhotoPicker: Bool = false
     @State private var photoSelection: PhotosPickerItem?
@@ -53,6 +54,13 @@ struct ContentView: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .accessibilityIdentifier("output_text")
+
+                    if let voiceError = voiceManager.errorMessage, !voiceError.isEmpty {
+                        Text(voiceError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
 
                 HStack {
@@ -61,6 +69,13 @@ struct ContentView: View {
                     } label: {
                         Image(systemName: "photo.badge.plus")
                     }
+
+                    Button {
+                        toggleVoiceInput()
+                    } label: {
+                        Image(systemName: voiceManager.isRecording ? "stop.circle.fill" : "mic.fill")
+                    }
+                    .accessibilityIdentifier("voice_input_button")
 
                     TextField("Prompt", text: $prompt)
                         .textFieldStyle(.roundedBorder)
@@ -103,19 +118,25 @@ struct ContentView: View {
 #if(os(macOS))
             .navigationSubtitle(vm.modelConfiguration.name)
 #endif
+            .onChange(of: vm.output) { _, newText in
+                voiceManager.consumeOutputText(newText)
+            }
         }
     }
 
     private func generate() {
         generationTask?.cancel()
+        voiceManager.beginOutputSpeechSession()
         generationTask = Task {
             await vm.generate(prompt: prompt, images: selectedImages)
+            voiceManager.finishOutputSpeechSession()
             generationTask = nil
         }
     }
 
     private func stopGeneration() {
         generationTask?.cancel()
+        voiceManager.finishOutputSpeechSession()
         generationTask = nil
     }
 
@@ -140,6 +161,9 @@ struct ContentView: View {
 #endif
 
     private func reset() {
+        generationTask?.cancel()
+        generationTask = nil
+        voiceManager.resetAll()
         vm.output = ""
         vm.tokensPerSecond = 0
 
@@ -151,6 +175,20 @@ struct ContentView: View {
         vm.isRunning ||
         prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
         (vm.downloadProgress != nil && !vm.downloadProgress!.isFinished)
+    }
+
+    private func toggleVoiceInput() {
+        if voiceManager.isRecording {
+            Task {
+                if let transcription = await voiceManager.stopRecordingAndTranscribe(), !transcription.isEmpty {
+                    prompt = transcription
+                }
+            }
+        } else {
+            Task {
+                await voiceManager.startRecordingPrompt()
+            }
+        }
     }
 }
 
