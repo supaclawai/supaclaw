@@ -21,7 +21,7 @@ struct ContentView: View {
         LLMModelFactory.shared.modelRegistry.registerCustomModels()
     }
 
-    private var vm = MLXViewModel(
+    @State private var vm = MLXViewModel(
         modelConfiguration: defaultModelConfiguration
     )
 
@@ -31,16 +31,116 @@ struct ContentView: View {
     private static let defaultModelConfiguration = MLXLLM.ModelRegistry.mistralNeMoMinitron8BInstruct4bit
     #endif
 
+    private static let defaultTelegramApiId = "12345678"
+    private static let defaultTelegramApiHash = "00000000000000000000000000000000"
+
     @State private var prompt: String = ""
     @State private var selectedImages: [Data] = []
 
     @State private var showingPhotoPicker: Bool = false
     @State private var photoSelection: PhotosPickerItem?
     @State private var generationTask: Task<Void, Never>?
+    @State private var telegramBridge: TelegramTDLibBridge?
 
     var body: some View {
         NavigationStack {
             VStack {
+#if os(iOS)
+                if let telegramBridge {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Telegram MTProto")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        TextField("API ID", text: Binding(
+                            get: { telegramBridge.apiIdText },
+                            set: { telegramBridge.apiIdText = $0 }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .keyboardType(.numberPad)
+                        .accessibilityIdentifier("telegram_api_id")
+
+                        TextField("API Hash", text: Binding(
+                            get: { telegramBridge.apiHash },
+                            set: { telegramBridge.apiHash = $0 }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("telegram_api_hash")
+
+                        TextField("Phone Number (+...)", text: Binding(
+                            get: { telegramBridge.phoneNumber },
+                            set: { telegramBridge.phoneNumber = $0 }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .keyboardType(.phonePad)
+                        .accessibilityIdentifier("telegram_phone")
+
+                        HStack {
+                            Button("Send Phone") {
+                                telegramBridge.submitPhone()
+                            }
+                            .accessibilityIdentifier("telegram_submit_phone")
+
+                            Text(telegramBridge.isAuthorized ? "Authorized" : "Not authorized")
+                                .font(.caption2)
+                                .foregroundStyle(telegramBridge.isAuthorized ? .green : .orange)
+                        }
+
+                        HStack {
+                            TextField("Login Code", text: Binding(
+                                get: { telegramBridge.authCode },
+                                set: { telegramBridge.authCode = $0 }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityIdentifier("telegram_code")
+
+                            Button("Submit") {
+                                telegramBridge.submitCode()
+                            }
+                            .accessibilityIdentifier("telegram_submit_code")
+                        }
+
+                        HStack {
+                            SecureField("2FA Password", text: Binding(
+                                get: { telegramBridge.twoFactorPassword },
+                                set: { telegramBridge.twoFactorPassword = $0 }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityIdentifier("telegram_password")
+
+                            Button("Submit") {
+                                telegramBridge.submitPassword()
+                            }
+                            .accessibilityIdentifier("telegram_submit_password")
+                        }
+
+                        HStack {
+                            if telegramBridge.isRunning {
+                                Button("Disconnect", action: stopTelegramBridge)
+                                    .accessibilityIdentifier("telegram_disconnect")
+                            } else {
+                                Button("Connect", action: startTelegramBridge)
+                                    .accessibilityIdentifier("telegram_connect")
+                            }
+
+                            Text(telegramBridge.statusText)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+
+                        Text(telegramBridge.lastInboundSummary)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    .padding(8)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                }
+#endif
+
                 ScrollView {
                     if let selectedImage = selectedImages.first, let image = PlatformImage(data: selectedImage) {
                         Image(platformImage: image)
@@ -103,6 +203,12 @@ struct ContentView: View {
 #if(os(macOS))
             .navigationSubtitle(vm.modelConfiguration.name)
 #endif
+            .task {
+                ensureTelegramBridge()
+            }
+            .onDisappear {
+                stopTelegramBridge()
+            }
         }
     }
 
@@ -117,6 +223,32 @@ struct ContentView: View {
     private func stopGeneration() {
         generationTask?.cancel()
         generationTask = nil
+    }
+
+    private func ensureTelegramBridge() {
+        guard telegramBridge == nil else { return }
+
+        let bridge = TelegramTDLibBridge { text, imageData in
+            await vm.generateTelegramReply(incomingText: text, imageData: imageData)
+        }
+
+        bridge.apiIdText = UserDefaults.standard.string(forKey: "telegram.api_id") ?? Self.defaultTelegramApiId
+        bridge.apiHash = UserDefaults.standard.string(forKey: "telegram.api_hash") ?? Self.defaultTelegramApiHash
+        bridge.phoneNumber = UserDefaults.standard.string(forKey: "telegram.phone") ?? ""
+        telegramBridge = bridge
+    }
+
+    private func startTelegramBridge() {
+        guard let telegramBridge else { return }
+
+        UserDefaults.standard.set(telegramBridge.apiIdText, forKey: "telegram.api_id")
+        UserDefaults.standard.set(telegramBridge.apiHash, forKey: "telegram.api_hash")
+        UserDefaults.standard.set(telegramBridge.phoneNumber, forKey: "telegram.phone")
+        telegramBridge.start()
+    }
+
+    private func stopTelegramBridge() {
+        telegramBridge?.stop()
     }
 
 #if(os(iOS))
