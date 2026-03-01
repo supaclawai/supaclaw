@@ -7,6 +7,7 @@ import AVKit
 
 final class VoiceIOManager: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published var isRecording = false
+    @Published var isSpeakingOutLoud = false
     @Published var errorMessage: String?
 
     private var audioRecorder: AVAudioRecorder?
@@ -131,6 +132,17 @@ final class VoiceIOManager: NSObject, ObservableObject, AVAudioPlayerDelegate {
         pendingSpeechBuffer = ""
     }
 
+    func speakTextImmediately(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        stopPlaybackAndResetQueues()
+        enqueueTTSChunk(trimmed)
+    }
+
+    func stopSpeechPlayback() {
+        stopPlaybackAndResetQueues()
+    }
+
     private func enqueueCompleteChunksIfAny() {
         while let splitIndex = pendingSpeechBuffer.firstIndex(where: { ".!?\n".contains($0) }) {
             let chunk = String(pendingSpeechBuffer[...splitIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -153,6 +165,7 @@ final class VoiceIOManager: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     private func enqueueTTSChunk(_ text: String) {
         pendingTTSChunks.append(text)
+        isSpeakingOutLoud = true
 
         if ttsProcessingTask == nil {
             ttsProcessingTask = Task { [weak self] in
@@ -183,7 +196,11 @@ final class VoiceIOManager: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     private func playNextAudioIfNeeded() {
-        guard audioPlayer == nil, !audioQueue.isEmpty else { return }
+        guard audioPlayer == nil else { return }
+        guard !audioQueue.isEmpty else {
+            isSpeakingOutLoud = false
+            return
+        }
 
         let data = audioQueue.removeFirst()
 
@@ -193,6 +210,7 @@ final class VoiceIOManager: NSObject, ObservableObject, AVAudioPlayerDelegate {
             player.prepareToPlay()
             if player.play() {
                 audioPlayer = player
+                isSpeakingOutLoud = true
             } else {
                 audioPlayer = nil
                 playNextAudioIfNeeded()
@@ -208,6 +226,9 @@ final class VoiceIOManager: NSObject, ObservableObject, AVAudioPlayerDelegate {
         Task { @MainActor in
             self.audioPlayer = nil
             self.playNextAudioIfNeeded()
+            if self.audioPlayer == nil && self.audioQueue.isEmpty && self.pendingTTSChunks.isEmpty {
+                self.isSpeakingOutLoud = false
+            }
         }
     }
 
@@ -219,6 +240,7 @@ final class VoiceIOManager: NSObject, ObservableObject, AVAudioPlayerDelegate {
         pendingTTSChunks.removeAll(keepingCapacity: false)
         ttsProcessingTask?.cancel()
         ttsProcessingTask = nil
+        isSpeakingOutLoud = false
     }
 
     private func requestMicrophonePermission() async -> Bool {

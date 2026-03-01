@@ -5,16 +5,21 @@
 //  Created by İbrahim Çetin on 28.02.2025.
 //
 
-import SwiftUI
 import Foundation
 import MLX
 import MLXLLM
 import MLXLMCommon
-import MLXVLM
 import MLXNN
+import MLXVLM
 import PhotosUI
+import SwiftUI
 
 struct ContentView: View {
+    private enum AppTab: Hashable {
+        case chat
+        case voice
+    }
+
     init() {
         replacementTokenizers["TokenizersBackend"] = "PreTrainedTokenizer"
         registerMistral3CompatibilityLoader()
@@ -26,9 +31,11 @@ struct ContentView: View {
     )
 
     #if os(iOS)
-    private static let defaultModelConfiguration = MLXLLM.ModelRegistry.ministral3_3BInstruct4bit
+        private static let defaultModelConfiguration = MLXLLM.ModelRegistry
+            .ministral3_3BInstruct4bit
     #else
-    private static let defaultModelConfiguration = MLXLLM.ModelRegistry.mistralNeMoMinitron8BInstruct4bit
+        private static let defaultModelConfiguration = MLXLLM.ModelRegistry
+            .mistralNeMoMinitron8BInstruct4bit
     #endif
 
     private static let defaultTelegramApiId = "12345678"
@@ -43,8 +50,56 @@ struct ContentView: View {
     @State private var generationTask: Task<Void, Never>?
     @State private var telegramBridge: TelegramTDLibBridge?
     @State private var useMockToolMode: Bool = false
+    @State private var selectedTab: AppTab = .chat
+    @State private var pendingForwardChatId: Int64?
+    @State private var pendingForwardMessageId: Int64 = 0
+    @State private var pendingForwardText: String = ""
+    @State private var voiceTabStatus: String = "Waiting for a forwarded request"
 
     var body: some View {
+        TabView(selection: $selectedTab) {
+            chatTab
+                .tabItem {
+                    Label("Chat", systemImage: "message")
+                }
+                .tag(AppTab.chat)
+
+            voiceTab
+                .tabItem {
+                    Label("Voice", systemImage: "waveform.circle.fill")
+                }
+                .tag(AppTab.voice)
+        }
+        .task {
+            ensureTelegramBridge()
+        }
+        .onDisappear {
+            stopTelegramBridge()
+        }
+        .onChange(of: vm.output) { _, newText in
+            voiceManager.consumeOutputText(newText)
+        }
+        .onChange(of: useMockToolMode) { _, isMock in
+            telegramBridge?.toolDecisionMode = isMock ? .mock : .llm
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .forwardMessageToUserRequested)) {
+            notification in
+            guard let userInfo = notification.userInfo,
+                let chatId = userInfo["chatId"] as? Int64,
+                let text = userInfo["text"] as? String
+            else {
+                return
+            }
+            pendingForwardChatId = chatId
+            pendingForwardMessageId = 0
+            pendingForwardText = text
+            selectedTab = .voice
+            voiceTabStatus = "Reading forwarded request..."
+            voiceManager.speakTextImmediately(text)
+        }
+    }
+
+    private var chatTab: some View {
         NavigationStack {
             VStack {
                 HStack {
@@ -63,104 +118,121 @@ struct ContentView: View {
                         .foregroundStyle(useMockToolMode ? .orange : .green)
                 }
 
-#if os(iOS)
-                if let telegramBridge {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Telegram MTProto")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                #if os(iOS)
+                    if let telegramBridge {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Telegram MTProto")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
 
-                        TextField("API ID", text: Binding(
-                            get: { telegramBridge.apiIdText },
-                            set: { telegramBridge.apiIdText = $0 }
-                        ))
-                        .textFieldStyle(.roundedBorder)
-                        .keyboardType(.numberPad)
-                        .accessibilityIdentifier("telegram_api_id")
-
-                        TextField("API Hash", text: Binding(
-                            get: { telegramBridge.apiHash },
-                            set: { telegramBridge.apiHash = $0 }
-                        ))
-                        .textFieldStyle(.roundedBorder)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .accessibilityIdentifier("telegram_api_hash")
-
-                        TextField("Phone Number (+...)", text: Binding(
-                            get: { telegramBridge.phoneNumber },
-                            set: { telegramBridge.phoneNumber = $0 }
-                        ))
-                        .textFieldStyle(.roundedBorder)
-                        .keyboardType(.phonePad)
-                        .accessibilityIdentifier("telegram_phone")
-
-                        HStack {
-                            Button("Send Phone") {
-                                telegramBridge.submitPhone()
-                            }
-                            .accessibilityIdentifier("telegram_submit_phone")
-
-                            Text(telegramBridge.isAuthorized ? "Authorized" : "Not authorized")
-                                .font(.caption2)
-                                .foregroundStyle(telegramBridge.isAuthorized ? .green : .orange)
-                        }
-
-                        HStack {
-                            TextField("Login Code", text: Binding(
-                                get: { telegramBridge.authCode },
-                                set: { telegramBridge.authCode = $0 }
-                            ))
+                            TextField(
+                                "API ID",
+                                text: Binding(
+                                    get: { telegramBridge.apiIdText },
+                                    set: { telegramBridge.apiIdText = $0 }
+                                )
+                            )
                             .textFieldStyle(.roundedBorder)
-                            .accessibilityIdentifier("telegram_code")
+                            .keyboardType(.numberPad)
+                            .accessibilityIdentifier("telegram_api_id")
 
-                            Button("Submit") {
-                                telegramBridge.submitCode()
-                            }
-                            .accessibilityIdentifier("telegram_submit_code")
-                        }
-
-                        HStack {
-                            SecureField("2FA Password", text: Binding(
-                                get: { telegramBridge.twoFactorPassword },
-                                set: { telegramBridge.twoFactorPassword = $0 }
-                            ))
+                            TextField(
+                                "API Hash",
+                                text: Binding(
+                                    get: { telegramBridge.apiHash },
+                                    set: { telegramBridge.apiHash = $0 }
+                                )
+                            )
                             .textFieldStyle(.roundedBorder)
-                            .accessibilityIdentifier("telegram_password")
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .accessibilityIdentifier("telegram_api_hash")
 
-                            Button("Submit") {
-                                telegramBridge.submitPassword()
+                            TextField(
+                                "Phone Number (+...)",
+                                text: Binding(
+                                    get: { telegramBridge.phoneNumber },
+                                    set: { telegramBridge.phoneNumber = $0 }
+                                )
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .keyboardType(.phonePad)
+                            .accessibilityIdentifier("telegram_phone")
+
+                            HStack {
+                                Button("Send Phone") {
+                                    telegramBridge.submitPhone()
+                                }
+                                .accessibilityIdentifier("telegram_submit_phone")
+
+                                Text(telegramBridge.isAuthorized ? "Authorized" : "Not authorized")
+                                    .font(.caption2)
+                                    .foregroundStyle(telegramBridge.isAuthorized ? .green : .orange)
                             }
-                            .accessibilityIdentifier("telegram_submit_password")
-                        }
 
-                        HStack {
-                            if telegramBridge.isRunning {
-                                Button("Disconnect", action: stopTelegramBridge)
-                                    .accessibilityIdentifier("telegram_disconnect")
-                            } else {
-                                Button("Connect", action: startTelegramBridge)
-                                    .accessibilityIdentifier("telegram_connect")
+                            HStack {
+                                TextField(
+                                    "Login Code",
+                                    text: Binding(
+                                        get: { telegramBridge.authCode },
+                                        set: { telegramBridge.authCode = $0 }
+                                    )
+                                )
+                                .textFieldStyle(.roundedBorder)
+                                .accessibilityIdentifier("telegram_code")
+
+                                Button("Submit") {
+                                    telegramBridge.submitCode()
+                                }
+                                .accessibilityIdentifier("telegram_submit_code")
                             }
 
-                            Text(telegramBridge.statusText)
+                            HStack {
+                                SecureField(
+                                    "2FA Password",
+                                    text: Binding(
+                                        get: { telegramBridge.twoFactorPassword },
+                                        set: { telegramBridge.twoFactorPassword = $0 }
+                                    )
+                                )
+                                .textFieldStyle(.roundedBorder)
+                                .accessibilityIdentifier("telegram_password")
+
+                                Button("Submit") {
+                                    telegramBridge.submitPassword()
+                                }
+                                .accessibilityIdentifier("telegram_submit_password")
+                            }
+
+                            HStack {
+                                if telegramBridge.isRunning {
+                                    Button("Disconnect", action: stopTelegramBridge)
+                                        .accessibilityIdentifier("telegram_disconnect")
+                                } else {
+                                    Button("Connect", action: startTelegramBridge)
+                                        .accessibilityIdentifier("telegram_connect")
+                                }
+
+                                Text(telegramBridge.statusText)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+
+                            Text(telegramBridge.lastInboundSummary)
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(2)
                         }
-
-                        Text(telegramBridge.lastInboundSummary)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
+                        .padding(8)
+                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
                     }
-                    .padding(8)
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
-                }
-#endif
+                #endif
 
                 ScrollView {
-                    if let selectedImage = selectedImages.first, let image = PlatformImage(data: selectedImage) {
+                    if let selectedImage = selectedImages.first,
+                        let image = PlatformImage(data: selectedImage)
+                    {
                         Image(platformImage: image)
                             .resizable()
                             .scaledToFit()
@@ -190,7 +262,8 @@ struct ContentView: View {
                     Button {
                         toggleVoiceInput()
                     } label: {
-                        Image(systemName: voiceManager.isRecording ? "stop.circle.fill" : "mic.fill")
+                        Image(
+                            systemName: voiceManager.isRecording ? "stop.circle.fill" : "mic.fill")
                     }
                     .accessibilityIdentifier("voice_input_button")
 
@@ -214,12 +287,14 @@ struct ContentView: View {
                 }
             }
             .padding()
-#if(os(iOS))
-            .photosPicker(isPresented: $showingPhotoPicker, selection: $photoSelection)
-            .onChange(of: photoSelection, addImage)
-#elseif(os(macOS))
-            .fileImporter(isPresented: $showingPhotoPicker, allowedContentTypes: [.image], onCompletion: addImage)
-#endif
+            #if (os(iOS))
+                .photosPicker(isPresented: $showingPhotoPicker, selection: $photoSelection)
+                .onChange(of: photoSelection, addImage)
+            #elseif (os(macOS))
+                .fileImporter(
+                    isPresented: $showingPhotoPicker, allowedContentTypes: [.image],
+                    onCompletion: addImage)
+            #endif
 
             .toolbar {
                 if let progress = vm.downloadProgress, !progress.isFinished {
@@ -232,21 +307,91 @@ struct ContentView: View {
                 .buttonStyle(.plain)
             }
             .navigationTitle("MLXSampleApp")
-#if(os(macOS))
-            .navigationSubtitle(vm.modelConfiguration.name)
-#endif
-            .task {
-                ensureTelegramBridge()
+            #if (os(macOS))
+                .navigationSubtitle(vm.modelConfiguration.name)
+            #endif
+        }
+    }
+
+    private var voiceTab: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color.black, Color(red: 0.07, green: 0.08, blue: 0.13)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+
+            VStack(spacing: 24) {
+                Text("Choose a voice")
+                    .font(.headline)
+                    .foregroundStyle(.white.opacity(0.95))
+
+                Spacer()
+
+                Button {
+                    Task {
+                        await handleVoiceCircleTap()
+                    }
+                } label: {
+                    ZStack {
+                        Circle()
+                            .fill(
+                                RadialGradient(
+                                    gradient: Gradient(colors: [
+                                        Color(red: 0.83, green: 0.94, blue: 1.0),
+                                        Color(red: 0.43, green: 0.74, blue: 1.0),
+                                        Color(red: 0.10, green: 0.51, blue: 0.98),
+                                    ]),
+                                    center: .topLeading,
+                                    startRadius: 10,
+                                    endRadius: 130
+                                )
+                            )
+                            .frame(width: 220, height: 220)
+                            .shadow(color: .blue.opacity(0.35), radius: 20, y: 10)
+
+                        Image(systemName: voiceCircleIconName)
+                            .font(.system(size: 52, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.95))
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("voice_mode_circle_button")
+
+                VStack(spacing: 8) {
+                    Text(voiceTabTitle)
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text(voiceTabStatus)
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.8))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(3)
+                    if !pendingForwardText.isEmpty {
+                        Text("Request: \(pendingForwardText)")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.7))
+                            .lineLimit(3)
+                            .multilineTextAlignment(.center)
+                    }
+                }
+                .padding(.horizontal, 24)
+
+                Spacer()
+
+                Button("Done") {
+                    selectedTab = .chat
+                }
+                .font(.headline)
+                .foregroundStyle(.black.opacity(0.85))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(.white.opacity(0.9), in: Capsule())
+                .padding(.horizontal, 22)
+                .padding(.bottom, 18)
             }
-            .onDisappear {
-                stopTelegramBridge()
-            }
-            .onChange(of: vm.output) { _, newText in
-                voiceManager.consumeOutputText(newText)
-            }
-            .onChange(of: useMockToolMode) { _, isMock in
-                telegramBridge?.toolDecisionMode = isMock ? .mock : .llm
-            }
+            .padding(.top, 16)
         }
     }
 
@@ -268,6 +413,74 @@ struct ContentView: View {
         generationTask = nil
     }
 
+    private var voiceCircleIconName: String {
+        if voiceManager.isRecording {
+            return "stop.fill"
+        }
+        if voiceManager.isSpeakingOutLoud {
+            return "waveform"
+        }
+        return "mic.fill"
+    }
+
+    private var voiceTabTitle: String {
+        if voiceManager.isRecording {
+            return "Listening..."
+        }
+        if voiceManager.isSpeakingOutLoud {
+            return "Speaking..."
+        }
+        return "Le Clawd"
+    }
+
+    private func handleVoiceCircleTap() async {
+        guard let telegramBridge else {
+            voiceTabStatus = "Telegram bridge is not ready"
+            return
+        }
+
+        guard let chatId = pendingForwardChatId else {
+            voiceTabStatus = "No pending forwarded request"
+            return
+        }
+
+        if voiceManager.isRecording {
+            voiceTabStatus = "Transcribing with Voxtral..."
+            let transcription = await voiceManager.stopRecordingAndTranscribe()?.trimmingCharacters(
+                in: .whitespacesAndNewlines)
+            guard let text = transcription, !text.isEmpty else {
+                voiceTabStatus = voiceManager.errorMessage ?? "No speech captured"
+                return
+            }
+
+            voiceTabStatus = "Running tool loop..."
+            await vm.handleTelegramMessageWithTools(
+                chatId: chatId,
+                incomingMessageId: pendingForwardMessageId,
+                incomingText: text,
+                imageData: nil,
+                runtime: telegramBridge,
+                mode: telegramBridge.toolDecisionMode
+            )
+
+            pendingForwardChatId = nil
+            pendingForwardMessageId = 0
+            pendingForwardText = ""
+            voiceTabStatus = "Response sent to Telegram"
+            return
+        }
+
+        if voiceManager.isSpeakingOutLoud {
+            voiceManager.stopSpeechPlayback()
+        }
+
+        voiceTabStatus = "Listening for user answer..."
+        await voiceManager.startRecordingPrompt()
+        if let error = voiceManager.errorMessage, !error.isEmpty {
+            voiceTabStatus = error
+        }
+    }
+
     private func ensureTelegramBridge() {
         guard telegramBridge == nil else { return }
 
@@ -282,8 +495,10 @@ struct ContentView: View {
             )
         }
 
-        bridge.apiIdText = UserDefaults.standard.string(forKey: "telegram.api_id") ?? Self.defaultTelegramApiId
-        bridge.apiHash = UserDefaults.standard.string(forKey: "telegram.api_hash") ?? Self.defaultTelegramApiHash
+        bridge.apiIdText =
+            UserDefaults.standard.string(forKey: "telegram.api_id") ?? Self.defaultTelegramApiId
+        bridge.apiHash =
+            UserDefaults.standard.string(forKey: "telegram.api_hash") ?? Self.defaultTelegramApiHash
         bridge.phoneNumber = UserDefaults.standard.string(forKey: "telegram.phone") ?? ""
         bridge.toolDecisionMode = useMockToolMode ? .mock : .llm
         telegramBridge = bridge
@@ -302,25 +517,25 @@ struct ContentView: View {
         telegramBridge?.stop()
     }
 
-#if(os(iOS))
-    private func addImage() {
-        Task {
-            if let data = try? await photoSelection?.loadTransferable(type: Data.self) {
+    #if (os(iOS))
+        private func addImage() {
+            Task {
+                if let data = try? await photoSelection?.loadTransferable(type: Data.self) {
+                    selectedImages = [data]
+                } else {
+                    selectedImages = []
+                }
+            }
+        }
+    #elseif (os(macOS))
+        private func addImage(_ result: Result<URL, any Error>) {
+            if let url = try? result.get(), let data = try? Data(contentsOf: url) {
                 selectedImages = [data]
             } else {
                 selectedImages = []
             }
         }
-    }
-#elseif(os(macOS))
-    private func addImage(_ result: Result<URL, any Error>) {
-        if let url = try? result.get(), let data = try? Data(contentsOf: url) {
-            selectedImages = [data]
-        } else {
-            selectedImages = []
-        }
-    }
-#endif
+    #endif
 
     private func reset() {
         vm.requestStopGeneration()
@@ -335,15 +550,16 @@ struct ContentView: View {
     }
 
     private var sendButtonDisabled: Bool {
-        vm.isRunning ||
-        prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-        (vm.downloadProgress != nil && !vm.downloadProgress!.isFinished)
+        vm.isRunning || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || (vm.downloadProgress != nil && !vm.downloadProgress!.isFinished)
     }
 
     private func toggleVoiceInput() {
         if voiceManager.isRecording {
             Task {
-                if let transcription = await voiceManager.stopRecordingAndTranscribe(), !transcription.isEmpty {
+                if let transcription = await voiceManager.stopRecordingAndTranscribe(),
+                    !transcription.isEmpty
+                {
                     prompt = transcription
                 }
             }

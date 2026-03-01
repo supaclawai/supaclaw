@@ -7,6 +7,10 @@ import CoreLocation
 import TDLibKit
 #endif
 
+extension Foundation.Notification.Name {
+    static let forwardMessageToUserRequested = Foundation.Notification.Name("forwardMessageToUserRequested")
+}
+
 @MainActor
 @Observable
 final class TelegramTDLibBridge: TelegramToolRuntime {
@@ -174,6 +178,8 @@ final class TelegramTDLibBridge: TelegramToolRuntime {
     }
 
     func forwardMessageToUser(chatId: Int64, text: String) async -> String {
+        postForwardToUserRequested(chatId: chatId, text: text)
+
         if toolDecisionMode == .mock {
             let question = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !question.isEmpty else { return "cancelled" }
@@ -200,6 +206,19 @@ final class TelegramTDLibBridge: TelegramToolRuntime {
                 }
             }
         }
+    }
+
+    private func postForwardToUserRequested(chatId: Int64, text: String) {
+        let payload = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !payload.isEmpty else { return }
+        NotificationCenter.default.post(
+            name: .forwardMessageToUserRequested,
+            object: nil,
+            userInfo: [
+                "chatId": chatId,
+                "text": payload
+            ]
+        )
     }
 
     func getUserLocation() async -> String {
