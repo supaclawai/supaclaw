@@ -1,6 +1,6 @@
 <div align="center">
-  <img src="img/supaclaw_moving.gif" alt="SupaClaw" width="100%">
   <h1>🐝 SupaClaw</h1>
+  <img src="img/supaclaw_moving.gif" alt="SupaClaw" width="300">
 </div>
 
 ![Application Schema](img/schema.png)
