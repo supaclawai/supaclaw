@@ -1,4 +1,4 @@
-# SupaClaw
+# 🐝 SupaClaw
 
 ![Application Schema](img/schema.png)
 
