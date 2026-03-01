@@ -1,6 +1,5 @@
 <div align="center">
   <h1>🐝 SupaClaw</h1>
-  <img src="img/supaclaw_moving.gif" alt="SupaClaw" width="300">
 </div>
 
 ![Application Schema](img/schema.png)
@@ -79,3 +78,7 @@ Configure these values in your Xcode scheme environment variables or app Info.pl
 Usage in app:
 - Tap mic button to record prompt audio, tap again to transcribe into the prompt field.
 - Generate output as usual; response text is spoken progressively while it appears.
+
+<div align="center">
+  <img src="img/supaclaw_moving.gif" alt="SupaClaw" width="300">
+</div>
