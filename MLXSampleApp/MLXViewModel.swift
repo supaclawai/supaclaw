@@ -312,6 +312,7 @@ class MLXViewModel {
         appendTelegramHistory(role: .user, text: normalized.isEmpty ? "<image>" : normalized)
         var toolTrace: [String] = []
         var lastNonToolModelText = ""
+        var lastToolState: ToolCallState?
 
         for round in 1...maxToolRounds {
             let plannerPrompt = toolPlannerPrompt(
@@ -353,6 +354,7 @@ class MLXViewModel {
                     runtime: runtime,
                     mode: .llm
                 )
+                lastToolState = ToolCallState(call: toolCall, result: toolResult)
                 toolTrace.append("tool=\(toolCall.tool) result=\(toolResult)")
                 if toolCall.tool == "forward_message_to_user",
                    let userReply = extractUserResponse(from: toolResult),
@@ -382,6 +384,13 @@ class MLXViewModel {
             if !nonToolText.isEmpty {
                 lastNonToolModelText = nonToolText
                 toolTrace.append("non_tool_output_ignored")
+                if let lastToolState {
+                    toolTrace.append(
+                        "parse_failed_retry_required tool=\(lastToolState.call.tool) args=\(lastToolState.call.arguments) last_result=\(lastToolState.result)"
+                    )
+                } else {
+                    toolTrace.append("parse_failed_retry_required tool=unknown")
+                }
                 print("""
                 [MLXSampleApp] TOOL_CALL_PARSE_FAILED
                 round=\(round)
@@ -519,6 +528,11 @@ class MLXViewModel {
     private struct ParsedToolCall {
         let tool: String
         let arguments: [String: String]
+    }
+
+    private struct ToolCallState {
+        let call: ParsedToolCall
+        let result: String
     }
 
     private func parseToolCall(from text: String) -> ParsedToolCall? {
@@ -699,6 +713,7 @@ class MLXViewModel {
         - If user says they are confused after a `forward_message_to_user` step (e.g. "didn't get it", "rephrase"), call `forward_message_to_user` again with a clearer, more explicit request.
         - If any previous tool result contains `user_response(...)`, your immediate next tool MUST be `tlg_message_response` using that response content.
         - After receiving `user_response(...)`, do not call `forward_message_to_user` again unless the user response itself explicitly asks for rephrase/clarification.
+        - If tool trace contains `parse_failed_retry_required`, immediately repeat the referenced tool call as valid JSON with the same tool and arguments.
 
         Preferred flow: choose tools until response is sent via `tlg_message_response`, then stop.
         Do not output plain prose replies. Return only JSON tool calls.
