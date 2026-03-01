@@ -81,5 +81,5 @@ Usage in app:
 - Generate output as usual; response text is spoken progressively while it appears.
 
 <div align="center">
-  <img src="img/supaclaw_moving.gif" alt="SupaClaw" width="300">
+  <img src="img/supaclaw_footer.png" alt="SupaClaw" width="100%">
 </div>
