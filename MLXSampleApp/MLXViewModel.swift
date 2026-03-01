@@ -644,6 +644,7 @@ class MLXViewModel {
         - ETA/arrival questions about "you": call `forward_message_to_user` to get the human's answer, then call `tlg_message_response` with that answer.
         - Location requests: call `get_user_location`, then call `tlg_message_response` with the location.
         - Missing context: call `expand_chat_context`.
+        - If user says they are confused after a `forward_message_to_user` step (e.g. "didn't get it", "rephrase"), call `forward_message_to_user` again with a clearer, more explicit request.
 
         Preferred flow: choose tools until response is sent via `tlg_message_response`, then stop.
         Do not output plain prose replies. Return only JSON tool calls.
