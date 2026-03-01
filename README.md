@@ -36,6 +36,10 @@ git clone https://github.com/ibrahimcetin/MLXSampleApp.git
 2. Open the project in Xcode.
 3. Follow the setup instructions in the first blog post to configure the environment and get started.
 
+# Architecture
+
+![Application Schema](img/schema.png)
+
 # Project Structure
 
 There are only 3 files important:
