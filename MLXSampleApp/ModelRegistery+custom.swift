@@ -10,7 +10,7 @@ import MLXLMCommon
 
 extension ModelRegistry {
     static let ministral3_3BInstruct4bit = ModelConfiguration(
-        id: "mlx-community/Ministral-3-3B-Instruct-2512-4bit",
+        id: "supateam/ministral-3-3B-RL-300_steps-mlx",
         overrideTokenizer: "PreTrainedTokenizer",
         defaultPrompt: "Answer in 3 concise bullets."
     )
