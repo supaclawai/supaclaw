@@ -1,5 +1,6 @@
 <div align="center">
   <h1>🐝 SupaClaw</h1>
+  <p>Voice-first Telegram assistant designed for distracted users (like drivers). Powered by ElevenLabs, Voxtral, and a fine-tuned Ministral 3B, it reads incoming messages aloud, executes smart function calls (weather, calendar, location), and sends dictated replies on the go.</p>
 </div>
 
 ![Application Schema](img/schema.png)
