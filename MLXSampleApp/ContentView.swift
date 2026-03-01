@@ -15,11 +15,6 @@ import PhotosUI
 import SwiftUI
 
 struct ContentView: View {
-    private enum AppTab: Hashable {
-        case chat
-        case voice
-    }
-
     init() {
         replacementTokenizers["TokenizersBackend"] = "PreTrainedTokenizer"
         registerMistral3CompatibilityLoader()
@@ -50,25 +45,48 @@ struct ContentView: View {
     @State private var generationTask: Task<Void, Never>?
     @State private var telegramBridge: TelegramTDLibBridge?
     @State private var useMockToolMode: Bool = false
-    @State private var selectedTab: AppTab = .chat
     @State private var pendingForwardChatId: Int64?
     @State private var pendingForwardMessageId: Int64 = 0
     @State private var pendingForwardText: String = ""
     @State private var voiceTabStatus: String = "Waiting for a forwarded request"
+    @State private var showStartupSplash: Bool = true
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            chatTab
-                .tabItem {
-                    Label("Chat", systemImage: "message")
-                }
-                .tag(AppTab.chat)
-
+        ZStack {
             voiceTab
-                .tabItem {
-                    Label("Voice", systemImage: "waveform.circle.fill")
+
+            if showStartupSplash {
+                ZStack {
+                    Color(red: 0.05, green: 0.07, blue: 0.12)
+                        .ignoresSafeArea()
+
+                    VStack {
+                        Spacer()
+
+                        Image("SupaClaw")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 280)
+
+                        Spacer()
+
+                        Text("SupaClaw")
+                            .font(.system(size: 24, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.92))
+                            .padding(.bottom, 34)
+                    }
                 }
-                .tag(AppTab.voice)
+                .transition(.opacity)
+                .zIndex(10)
+            }
+        }
+        .onAppear {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                withAnimation(.easeOut(duration: 0.25)) {
+                    showStartupSplash = false
+                }
+            }
         }
         .task {
             ensureTelegramBridge()
@@ -87,11 +105,11 @@ struct ContentView: View {
             else {
                 return
             }
-            print("[MLXSampleApp] Voice tab received forward event chat=\(chatId) len=\(text.count)")
+            print(
+                "[MLXSampleApp] Voice tab received forward event chat=\(chatId) len=\(text.count)")
             pendingForwardChatId = chatId
             pendingForwardMessageId = 0
             pendingForwardText = text
-            selectedTab = .voice
             voiceTabStatus = "Reading forwarded request..."
             voiceManager.speakTextImmediately(text)
         }
@@ -325,6 +343,13 @@ struct ContentView: View {
                     .font(.headline)
                     .foregroundStyle(.white.opacity(0.95))
 
+                Image("SupaClaw")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: 190)
+                    .opacity(0.85)
+                    .allowsHitTesting(false)
+
                 Spacer()
 
                 Button {
@@ -378,16 +403,14 @@ struct ContentView: View {
 
                 Spacer()
 
-                Button("Done") {
-                    selectedTab = .chat
-                }
-                .font(.headline)
-                .foregroundStyle(.black.opacity(0.85))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(.white.opacity(0.9), in: Capsule())
-                .padding(.horizontal, 22)
-                .padding(.bottom, 18)
+                Button("Connected") {}
+                    .font(.headline)
+                    .foregroundStyle(.black.opacity(0.85))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(.white.opacity(0.9), in: Capsule())
+                    .padding(.horizontal, 22)
+                    .padding(.bottom, 18)
             }
             .padding(.top, 16)
         }
@@ -425,7 +448,7 @@ struct ContentView: View {
         if voiceManager.isSpeakingOutLoud {
             return "Speaking..."
         }
-        return "SupaClawd"
+        return "SupaClaw"
     }
 
     private func handleVoiceCircleTap() async {
@@ -453,7 +476,9 @@ struct ContentView: View {
             } else {
                 // Keep tool pipeline strictly serial:
                 // if no pending forward waiter exists, do not start a parallel/new inference loop.
-                print("[MLXSampleApp] Voice response ignored: no pending forward waiter for chat=\(chatId)")
+                print(
+                    "[MLXSampleApp] Voice response ignored: no pending forward waiter for chat=\(chatId)"
+                )
                 voiceTabStatus = "No pending forward request. Try forward-to-user again."
                 return
             }
@@ -497,6 +522,10 @@ struct ContentView: View {
         bridge.phoneNumber = UserDefaults.standard.string(forKey: "telegram.phone") ?? ""
         bridge.toolDecisionMode = useMockToolMode ? .mock : .llm
         telegramBridge = bridge
+
+        if !bridge.isRunning {
+            startTelegramBridge()
+        }
     }
 
     private func startTelegramBridge() {
