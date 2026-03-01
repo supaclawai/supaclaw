@@ -1,4 +1,6 @@
-# MLXSampleApp
+# SupaClaw
+
+![Application Schema](img/schema.png)
 
 Welcome! This project demonstrates how to run large language models (LLMs) on iOS and macOS devices using the **MLX Swift** framework. It serves as a practical guide through the process of integrating, adding, and running Hugging Face models on your device.
 
@@ -35,10 +37,6 @@ git clone https://github.com/ibrahimcetin/MLXSampleApp.git
 ```
 2. Open the project in Xcode.
 3. Follow the setup instructions in the first blog post to configure the environment and get started.
-
-# Architecture
-
-![Application Schema](img/schema.png)
 
 # Project Structure
 
