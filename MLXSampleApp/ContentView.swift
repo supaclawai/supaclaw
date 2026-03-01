@@ -262,6 +262,7 @@ struct ContentView: View {
 
     private func stopGeneration() {
         vm.requestStopGeneration()
+        vm.clearConversationContext()
         generationTask?.cancel()
         voiceManager.finishOutputSpeechSession()
         generationTask = nil
