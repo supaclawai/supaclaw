@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0FAC3BBB2D746A0B00F731C6 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = 0FAC3BBA2D746A0B00F731C6 /* MLXLLM */; };
 		0FF5DF192D773C9000E882B4 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = 0FF5DF182D773C9000E882B4 /* MLXVLM */; };
+		B1A1A1012F10000100ABC001 /* TDLibKit in Frameworks */ = {isa = PBXBuildFile; productRef = B1A1A1002F10000100ABC001 /* TDLibKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -44,6 +45,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B1A1A1012F10000100ABC001 /* TDLibKit in Frameworks */,
 				0FF5DF192D773C9000E882B4 /* MLXVLM in Frameworks */,
 				0FAC3BBB2D746A0B00F731C6 /* MLXLLM in Frameworks */,
 			);
@@ -107,6 +109,7 @@
 			packageProductDependencies = (
 				0FAC3BBA2D746A0B00F731C6 /* MLXLLM */,
 				0FF5DF182D773C9000E882B4 /* MLXVLM */,
+				B1A1A1002F10000100ABC001 /* TDLibKit */,
 			);
 			productName = MLXSampleApp;
 			productReference = 0FA88C3C2D71E675001EC521 /* MLXSampleApp.app */;
@@ -165,6 +168,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				0FAC3BB92D746A0B00F731C6 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */,
+				B1A1A1022F10000100ABC001 /* XCRemoteSwiftPackageReference "TDLibKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 0FA88C3D2D71E675001EC521 /* Products */;
@@ -350,6 +354,8 @@
 				DEVELOPMENT_TEAM = 5KNF7B55U4;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Microphone access is required to transcribe voice prompts.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Location is used to answer location-aware tool requests.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -383,6 +389,8 @@
 				DEVELOPMENT_TEAM = 5KNF7B55U4;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Microphone access is required to transcribe voice prompts.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Location is used to answer location-aware tool requests.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -478,6 +486,14 @@
 				kind = branch;
 			};
 		};
+		B1A1A1022F10000100ABC001 /* XCRemoteSwiftPackageReference "TDLibKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/Swiftgram/TDLibKit";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -490,6 +506,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 0FAC3BB92D746A0B00F731C6 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
 			productName = MLXVLM;
+		};
+		B1A1A1002F10000100ABC001 /* TDLibKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B1A1A1022F10000100ABC001 /* XCRemoteSwiftPackageReference "TDLibKit" */;
+			productName = TDLibKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

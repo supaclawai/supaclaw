@@ -50,3 +50,27 @@ Each file is designed to keep the project easy to understand.
 [My Medium](https://medium.com/@cetinibrahim)
 [Hugging Face](https://huggingface.co/mlx-community)
 [MLX Swift](https://github.com/ml-explore/mlx-swift)
+
+# Voice I/O Setup (Remote STT/TTS)
+
+The app now supports:
+- STT via Mistral Audio Transcriptions (`voxtral-big-latest` by default)
+- TTS via ElevenLabs Text-to-Speech
+
+Configure these values in your Xcode scheme environment variables or app Info.plist keys:
+- `MISTRAL_API_KEY` (required for STT)
+- `MISTRAL_BASE_URL` (optional, default: `https://api.mistral.ai`)
+- `MISTRAL_STT_MODEL` (optional, default: `voxtral-big-latest`)
+- `ELEVENLABS_API_KEY` (required for TTS)
+- `ELEVENLABS_VOICE_ID` (optional, default: `EXAVITQu4vr4xnSDxMaL`)
+- `ELEVENLABS_MODEL_ID` (optional, default: `eleven_multilingual_v2`)
+- Optional: `TEST_ENV_PATH` pointing to a dotenv file (for example your local `test.env`)
+
+`test.env` auto-loading:
+- The app now attempts to load `test.env` automatically from current working directory.
+- It also loads `test.env` if bundled into the app resources.
+- For iOS Simulator/app sandbox reliability, prefer setting `TEST_ENV_PATH` in scheme env vars.
+
+Usage in app:
+- Tap mic button to record prompt audio, tap again to transcribe into the prompt field.
+- Generate output as usual; response text is spoken progressively while it appears.
