@@ -116,7 +116,8 @@ class MLXViewModel {
 
     /// The hub which changes the default download directory.
     /// On iOS we must use app-sandbox writable storage.
-    private let hub = HubApi(downloadBase: modelDownloadDirectory)
+    private static let huggingFaceToken = "***REMOVED_HUGGINGFACE_TOKEN***"
+    private let hub = HubApi(downloadBase: modelDownloadDirectory, hfToken: huggingFaceToken)
 
     private static var modelDownloadDirectory: URL {
 #if os(iOS)
