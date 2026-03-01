@@ -33,6 +33,8 @@ final class TelegramTDLibBridge: TelegramToolRuntime {
     private var client: TDLibClient?
 #endif
     private var pendingForwardResponseWaiters: [Int64: CheckedContinuation<String, Never>] = [:]
+    private var lastForwardPromptByChat: [Int64: String] = [:]
+    private var awaitingForwardUserResponseChats: Set<Int64> = []
 #if os(iOS)
     private let locationProvider = IOSLocationProvider()
 #endif
@@ -147,11 +149,33 @@ final class TelegramTDLibBridge: TelegramToolRuntime {
 #endif
     }
 
+    func submitForwardedUserResponse(chatId: Int64, text: String) -> Bool {
+        let payload = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !payload.isEmpty else { return false }
+        guard let waiter = pendingForwardResponseWaiters.removeValue(forKey: chatId) else { return false }
+        awaitingForwardUserResponseChats.remove(chatId)
+        waiter.resume(returning: "user_response(\(payload))")
+        return true
+    }
+
     func tlgMessageResponse(chatId: Int64, text: String) async -> String {
 #if canImport(TDLibKit)
         guard let client else { return "fail: TDLib client unavailable" }
         let payload = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !payload.isEmpty else { return "fail: empty text" }
+
+        if awaitingForwardUserResponseChats.contains(chatId) {
+            print("[MLXSampleApp] TDLib send blocked: chat is in forward-user handoff state chat=\(chatId)")
+            return "fail: awaiting forwarded user response"
+        }
+
+        if let prompt = lastForwardPromptByChat[chatId],
+           normalizedText(payload) == normalizedText(prompt) {
+            print("[MLXSampleApp] TDLib send blocked: payload duplicates forward prompt chat=\(chatId)")
+            return "fail: payload duplicates forward prompt"
+        }
+
+        print("[MLXSampleApp] TDLib send attempt chat=\(chatId) len=\(payload.count)")
 
         do {
             _ = try await client.sendMessage(
@@ -168,8 +192,10 @@ final class TelegramTDLibBridge: TelegramToolRuntime {
                 replyTo: nil,
                 topicId: nil
             )
+            print("[MLXSampleApp] TDLib send success chat=\(chatId)")
             return "success"
         } catch {
+            print("[MLXSampleApp] TDLib send fail chat=\(chatId) error=\(String(reflecting: error))")
             return "fail: \(error.localizedDescription)"
         }
 #else
@@ -179,20 +205,11 @@ final class TelegramTDLibBridge: TelegramToolRuntime {
 
     func forwardMessageToUser(chatId: Int64, text: String) async -> String {
         postForwardToUserRequested(chatId: chatId, text: text)
-
-        if toolDecisionMode == .mock {
-            let question = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !question.isEmpty else { return "cancelled" }
-
-            _ = await tlgMessageResponse(chatId: chatId, text: "Question to user: \(question)")
-            let mockReply = mockUserResponse(for: question)
-            return "user_response(\(mockReply))"
-        }
-
-        let sendResult = await tlgMessageResponse(chatId: chatId, text: text)
-        guard sendResult == "success" else { return sendResult }
+        lastForwardPromptByChat[chatId] = text
+        awaitingForwardUserResponseChats.insert(chatId)
 
         if pendingForwardResponseWaiters[chatId] != nil {
+            print("[MLXSampleApp] forwardMessageToUser skipped: pending waiter already exists for chat=\(chatId)")
             return "cancelled"
         }
 
@@ -202,15 +219,21 @@ final class TelegramTDLibBridge: TelegramToolRuntime {
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 90 * 1_000_000_000)
                 if let waiter = pendingForwardResponseWaiters.removeValue(forKey: chatId) {
+                    // Keep forward handoff state until an explicit user response arrives.
                     waiter.resume(returning: "dismissed")
                 }
             }
         }
     }
 
+    func notifyForwardToUser(chatId: Int64, text: String) {
+        postForwardToUserRequested(chatId: chatId, text: text)
+    }
+
     private func postForwardToUserRequested(chatId: Int64, text: String) {
         let payload = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !payload.isEmpty else { return }
+        print("[MLXSampleApp] forwardMessageToUserRequested chat=\(chatId) len=\(payload.count)")
         NotificationCenter.default.post(
             name: .forwardMessageToUserRequested,
             object: nil,
@@ -276,6 +299,7 @@ final class TelegramTDLibBridge: TelegramToolRuntime {
             case .updateNewMessage(let newMessage):
                 if let payload = try await inboundPayload(from: newMessage.message, client: client) {
                     if let waiter = pendingForwardResponseWaiters.removeValue(forKey: newMessage.message.chatId) {
+                        awaitingForwardUserResponseChats.remove(newMessage.message.chatId)
                         waiter.resume(returning: "user_response(\(payload.text))")
                         return
                     }
@@ -479,27 +503,22 @@ final class TelegramTDLibBridge: TelegramToolRuntime {
         return "[id:\(message.id) date:\(message.date) sender:\(sender)] \(body)"
     }
 
-    private func mockUserResponse(for question: String) -> String {
-        let q = question.lowercased()
-        if q.contains("arrive") || q.contains("arrival") || q.contains("eta") {
-            return "it's 15 mins"
-        }
-        if q.contains("where") || q.contains("location") {
-            return "I'm on my way from downtown."
-        }
-        if q.contains("confirm") {
-            return "Yes, confirmed."
-        }
-        return "Got it, I'll reply in 15 mins."
-    }
 #endif
 
     private func resolveAllPendingForwardWaiters(with result: String) {
         let waiters = pendingForwardResponseWaiters.values
         pendingForwardResponseWaiters.removeAll(keepingCapacity: false)
+        awaitingForwardUserResponseChats.removeAll(keepingCapacity: false)
         for waiter in waiters {
             waiter.resume(returning: result)
         }
+    }
+
+    private func normalizedText(_ text: String) -> String {
+        text.lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "[^a-z0-9 ]", with: "", options: .regularExpression)
     }
 }
 

@@ -57,6 +57,7 @@ final class VoiceIOManager: NSObject, ObservableObject, AVAudioPlayerDelegate {
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
+            print("[MLXSampleApp] VoiceIO startRecordingPrompt error: \(String(reflecting: error))")
         }
     }
 
@@ -80,6 +81,7 @@ final class VoiceIOManager: NSObject, ObservableObject, AVAudioPlayerDelegate {
         } catch {
             isRecording = false
             errorMessage = error.localizedDescription
+            print("[MLXSampleApp] VoiceIO stopRecordingAndTranscribe error: \(String(reflecting: error))")
             return nil
         }
     }
@@ -135,6 +137,15 @@ final class VoiceIOManager: NSObject, ObservableObject, AVAudioPlayerDelegate {
     func speakTextImmediately(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        #if os(iOS)
+        do {
+            try configurePlaybackSession()
+        } catch {
+            print("[MLXSampleApp] VoiceIO configurePlaybackSession error: \(String(reflecting: error))")
+        }
+        #endif
+        let preview = String(trimmed.prefix(120))
+        print("[MLXSampleApp] VoiceIO speakTextImmediately len=\(trimmed.count) preview=\(preview)")
         stopPlaybackAndResetQueues()
         enqueueTTSChunk(trimmed)
     }
@@ -182,13 +193,19 @@ final class VoiceIOManager: NSObject, ObservableObject, AVAudioPlayerDelegate {
             }
 
             let chunk = pendingTTSChunks.removeFirst()
+            print("[MLXSampleApp] VoiceIO TTS request len=\(chunk.count)")
 
             do {
                 let audioData = try await synthesizeWithElevenLabs(text: chunk)
                 audioQueue.append(audioData)
                 playNextAudioIfNeeded()
             } catch {
+                if Task.isCancelled || isCancellationError(error) {
+                    // Stop requests should not surface as user-visible errors.
+                    continue
+                }
                 errorMessage = error.localizedDescription
+                print("[MLXSampleApp] VoiceIO ElevenLabs TTS error: \(String(reflecting: error))")
             }
         }
 
@@ -201,6 +218,14 @@ final class VoiceIOManager: NSObject, ObservableObject, AVAudioPlayerDelegate {
             isSpeakingOutLoud = false
             return
         }
+
+        #if os(iOS)
+        do {
+            try configurePlaybackSession()
+        } catch {
+            print("[MLXSampleApp] VoiceIO configurePlaybackSession error: \(String(reflecting: error))")
+        }
+        #endif
 
         let data = audioQueue.removeFirst()
 
@@ -217,6 +242,7 @@ final class VoiceIOManager: NSObject, ObservableObject, AVAudioPlayerDelegate {
             }
         } catch {
             errorMessage = error.localizedDescription
+            print("[MLXSampleApp] VoiceIO playback error: \(String(reflecting: error))")
             audioPlayer = nil
             playNextAudioIfNeeded()
         }
@@ -252,6 +278,14 @@ final class VoiceIOManager: NSObject, ObservableObject, AVAudioPlayerDelegate {
         return false
         #endif
     }
+
+    #if os(iOS)
+    private func configurePlaybackSession() throws {
+        let audioSession = AVAudioSession.sharedInstance()
+        try audioSession.setCategory(.playback, mode: .default, options: [.duckOthers])
+        try audioSession.setActive(true)
+    }
+    #endif
 
     private func transcribeWithMistral(audioData: Data, filename: String) async throws -> String {
         guard let apiKey = Secrets.mistralAPIKey, !apiKey.isEmpty else {
@@ -329,8 +363,20 @@ final class VoiceIOManager: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
         guard (200...299).contains(httpResponse.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? "<non-utf8-response>"
+            print("[MLXSampleApp] VoiceIO HTTP error status=\(httpResponse.statusCode) body=\(body)")
             throw VoiceIOError.apiError(statusCode: httpResponse.statusCode, body: body)
         }
+    }
+
+    private func isCancellationError(_ error: Error) -> Bool {
+        if error is CancellationError {
+            return true
+        }
+        if let urlError = error as? URLError {
+            return urlError.code == .cancelled
+        }
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == URLError.cancelled.rawValue
     }
 
     private func makeMultipartBody(boundary: String, model: String, filename: String, audioData: Data) -> Data {

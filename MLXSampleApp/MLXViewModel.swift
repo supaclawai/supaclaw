@@ -30,9 +30,11 @@ private final class GenerationCancellationFlag: @unchecked Sendable {
     }
 }
 
+@MainActor
 protocol TelegramToolRuntime: AnyObject {
     func tlgMessageResponse(chatId: Int64, text: String) async -> String
     func forwardMessageToUser(chatId: Int64, text: String) async -> String
+    func notifyForwardToUser(chatId: Int64, text: String)
     func getUserLocation() async -> String
     func expandChatContext(chatId: Int64, fromMessageId: Int64, limit: Int) async -> String
     func elaborateRequestToUser(chatId: Int64, text: String) async -> String
@@ -51,7 +53,6 @@ class MLXViewModel {
         static let unsupportedToolPrefix = "error: unsupported tool"
 
         // Mocked tool results (easy to tune in one place)
-        static let mockForwardUserResponse = "I'm on my way, will be there at 15 minutes"
         static let mockLocation = "coordinates: 37.7749,-122.4194"
         static let mockExpandedContext = """
         [id:1001 date:1772300000 sender:user] On my way now.
@@ -288,6 +289,16 @@ class MLXViewModel {
             return
         }
 
+        if normalized.lowercased().hasPrefix("mock:") {
+            await runMockToolPipeline(
+                chatId: chatId,
+                incomingMessageId: incomingMessageId,
+                incomingText: normalized,
+                runtime: runtime
+            )
+            return
+        }
+
         if mode == .mock {
             await runMockToolPipeline(
                 chatId: chatId,
@@ -316,9 +327,25 @@ class MLXViewModel {
             )
 
             let trimmed = modelOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+            print("""
+            [MLXSampleApp] TOOL_ROUND
+            round=\(round)/\(maxToolRounds)
+            mode=\(mode.rawValue)
+            chatId=\(chatId)
+            incomingMessageId=\(incomingMessageId)
+            incomingText=\(normalized)
+            imageAttached=\(imageData != nil)
+            modelOutputRaw=\(trimmed)
+            """)
             if trimmed.isEmpty { continue }
 
             if let toolCall = parseToolCall(from: trimmed) {
+                print("""
+                [MLXSampleApp] TOOL_CALL_PARSED
+                round=\(round)
+                tool=\(toolCall.tool)
+                arguments=\(toolCall.arguments)
+                """)
                 let toolResult = await runToolCall(
                     toolCall,
                     chatId: chatId,
@@ -327,11 +354,25 @@ class MLXViewModel {
                     mode: .llm
                 )
                 toolTrace.append("tool=\(toolCall.tool) result=\(toolResult)")
-                print("[MLXSampleApp] Tool call executed \(toolCall.tool) -> \(toolResult)")
+                if toolCall.tool == "forward_message_to_user",
+                   let userReply = extractUserResponse(from: toolResult),
+                   !userReply.isEmpty {
+                    toolTrace.append("user_response_received=\(userReply)")
+                    toolTrace.append("next_required_tool=tlg_message_response")
+                }
+                print("""
+                [MLXSampleApp] TOOL_CALL_RESULT
+                round=\(round)
+                tool=\(toolCall.tool)
+                arguments=\(toolCall.arguments)
+                result=\(toolResult)
+                toolTrace=\(toolTrace)
+                """)
 
                 if toolCall.tool == "tlg_message_response" && toolResult == "success" {
                     output = "final_reply_sent(success)"
                     appendTelegramHistory(role: .assistant, text: "[sent via tlg_message_response]")
+                    print("[MLXSampleApp] TOOL_LOOP_STOP reason=tlg_message_response_success")
                     return
                 }
                 continue
@@ -341,6 +382,13 @@ class MLXViewModel {
             if !nonToolText.isEmpty {
                 lastNonToolModelText = nonToolText
                 toolTrace.append("non_tool_output_ignored")
+                print("""
+                [MLXSampleApp] TOOL_CALL_PARSE_FAILED
+                round=\(round)
+                mode=\(mode.rawValue)
+                nonToolText=\(nonToolText)
+                toolTrace=\(toolTrace)
+                """)
                 continue
             }
         }
@@ -368,6 +416,14 @@ class MLXViewModel {
 
         var results: [String] = []
         for call in calls {
+            print("""
+            [MLXSampleApp] MOCK_TOOL_CALL
+            chatId=\(chatId)
+            incomingMessageId=\(incomingMessageId)
+            incomingText=\(incomingText)
+            tool=\(call.tool)
+            arguments=\(call.arguments)
+            """)
             let result = await runToolCall(
                 call,
                 chatId: chatId,
@@ -375,6 +431,12 @@ class MLXViewModel {
                 runtime: runtime,
                 mode: .mock
             )
+            print("""
+            [MLXSampleApp] MOCK_TOOL_RESULT
+            tool=\(call.tool)
+            arguments=\(call.arguments)
+            result=\(result)
+            """)
             results.append("\(call.tool) => \(result)")
 
             // Mock E2E loop: simulate a follow-up LLM decision to answer in Telegram
@@ -397,18 +459,6 @@ class MLXViewModel {
             if call.tool == "forward_message_to_user",
                let userReply = extractUserResponse(from: result) {
                 output = userReply
-                let followUp = ParsedToolCall(
-                    tool: "tlg_message_response",
-                    arguments: ["text": "Thanks, got your response: \(userReply)"]
-                )
-                let followUpResult = await runToolCall(
-                    followUp,
-                    chatId: chatId,
-                    incomingMessageId: incomingMessageId,
-                    runtime: runtime,
-                    mode: .mock
-                )
-                results.append("tlg_message_response => \(followUpResult)")
             }
         }
 
@@ -523,18 +573,20 @@ class MLXViewModel {
         switch toolCall.tool {
         case "tlg_message_response":
             let text = toolCall.arguments["text"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !text.isEmpty else { return ToolResultText.missingTextError }
+            guard !text.isEmpty else {
+                print("[MLXSampleApp] tlg_message_response blocked: empty text")
+                return ToolResultText.missingTextError
+            }
             guard !isInternalToolTraceText(text) else {
+                print("[MLXSampleApp] tlg_message_response blocked: invalid final message format text=\(text)")
                 return "fail: invalid final message format"
             }
+            print("[MLXSampleApp] tlg_message_response attempt chat=\(chatId) text=\(text)")
             return await runtime.tlgMessageResponse(chatId: chatId, text: text)
 
         case "forward_message_to_user":
             let text = toolCall.arguments["text"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !text.isEmpty else { return ToolResultText.missingTextError }
-            if mode == .mock {
-                return "user_response(\(ToolResultText.mockForwardUserResponse))"
-            }
             return await runtime.forwardMessageToUser(chatId: chatId, text: text)
 
         case "get_user_location":
@@ -635,7 +687,7 @@ class MLXViewModel {
 
         Available tools (return ONLY JSON with `tool` and `arguments`):
         1) tlg_message_response { "text": "..." } -> send FINAL response in current chat (only visible send tool)
-        2) forward_message_to_user { "text": "..." } -> ask the human owner for clarification; returns dismissed/cancelled/user_response(text)
+        2) forward_message_to_user { "text": "..." } -> local voice handoff to human owner (not a Telegram send); returns dismissed/cancelled/user_response(text)
         3) get_user_location {} -> returns location text/coordinates
         4) expand_chat_context { "limit": "15" } -> returns older messages metadata or fail
         5) elaborate_request_to_user { "text": "..." } -> send clearer rephrased ask to user
@@ -645,6 +697,8 @@ class MLXViewModel {
         - Location requests: call `get_user_location`, then call `tlg_message_response` with the location.
         - Missing context: call `expand_chat_context`.
         - If user says they are confused after a `forward_message_to_user` step (e.g. "didn't get it", "rephrase"), call `forward_message_to_user` again with a clearer, more explicit request.
+        - If any previous tool result contains `user_response(...)`, your immediate next tool MUST be `tlg_message_response` using that response content.
+        - After receiving `user_response(...)`, do not call `forward_message_to_user` again unless the user response itself explicitly asks for rephrase/clarification.
 
         Preferred flow: choose tools until response is sent via `tlg_message_response`, then stop.
         Do not output plain prose replies. Return only JSON tool calls.
