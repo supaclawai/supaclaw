@@ -76,9 +76,6 @@ struct ContentView: View {
         .onDisappear {
             stopTelegramBridge()
         }
-        .onChange(of: vm.output) { _, newText in
-            voiceManager.consumeOutputText(newText)
-        }
         .onChange(of: useMockToolMode) { _, isMock in
             telegramBridge?.toolDecisionMode = isMock ? .mock : .llm
         }
@@ -90,6 +87,7 @@ struct ContentView: View {
             else {
                 return
             }
+            print("[MLXSampleApp] Voice tab received forward event chat=\(chatId) len=\(text.count)")
             pendingForwardChatId = chatId
             pendingForwardMessageId = 0
             pendingForwardText = text
@@ -397,10 +395,8 @@ struct ContentView: View {
 
     private func generate() {
         generationTask?.cancel()
-        voiceManager.beginOutputSpeechSession()
         generationTask = Task {
             await vm.generate(prompt: prompt, images: selectedImages)
-            voiceManager.finishOutputSpeechSession()
             generationTask = nil
         }
     }
@@ -409,7 +405,6 @@ struct ContentView: View {
         vm.requestStopGeneration()
         vm.clearConversationContext()
         generationTask?.cancel()
-        voiceManager.finishOutputSpeechSession()
         generationTask = nil
     }
 
@@ -453,15 +448,15 @@ struct ContentView: View {
                 return
             }
 
-            voiceTabStatus = "Running tool loop..."
-            await vm.handleTelegramMessageWithTools(
-                chatId: chatId,
-                incomingMessageId: pendingForwardMessageId,
-                incomingText: text,
-                imageData: nil,
-                runtime: telegramBridge,
-                mode: telegramBridge.toolDecisionMode
-            )
+            if telegramBridge.submitForwardedUserResponse(chatId: chatId, text: text) {
+                voiceTabStatus = "Delivered voice response to tool loop"
+            } else {
+                // Keep tool pipeline strictly serial:
+                // if no pending forward waiter exists, do not start a parallel/new inference loop.
+                print("[MLXSampleApp] Voice response ignored: no pending forward waiter for chat=\(chatId)")
+                voiceTabStatus = "No pending forward request. Try forward-to-user again."
+                return
+            }
 
             pendingForwardChatId = nil
             pendingForwardMessageId = 0
