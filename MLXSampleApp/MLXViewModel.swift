@@ -51,6 +51,7 @@ class MLXViewModel {
         static let unsupportedToolPrefix = "error: unsupported tool"
 
         // Mocked tool results (easy to tune in one place)
+        static let mockForwardUserResponse = "I'm on my way, will be there at 15 minutes"
         static let mockLocation = "coordinates: 37.7749,-122.4194"
         static let mockExpandedContext = """
         [id:1001 date:1772300000 sender:user] On my way now.
@@ -226,6 +227,10 @@ class MLXViewModel {
         activeCancellationFlag?.cancel()
     }
 
+    func clearConversationContext() {
+        telegramConversationHistory.removeAll(keepingCapacity: false)
+    }
+
     func generateTelegramReply(incomingText: String, imageData: Data?) async {
         let normalized = incomingText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty || imageData != nil else {
@@ -295,7 +300,7 @@ class MLXViewModel {
 
         appendTelegramHistory(role: .user, text: normalized.isEmpty ? "<image>" : normalized)
         var toolTrace: [String] = []
-        var fallbackFinalText = ""
+        var lastNonToolModelText = ""
 
         for round in 1...maxToolRounds {
             let plannerPrompt = toolPlannerPrompt(
@@ -332,28 +337,20 @@ class MLXViewModel {
                 continue
             }
 
-            fallbackFinalText = sanitizeFinalModelText(trimmed)
-            if !fallbackFinalText.isEmpty {
-                let sendResult = await runtime.tlgMessageResponse(chatId: chatId, text: fallbackFinalText)
-                output = "final_reply_sent(\(sendResult))\n\(fallbackFinalText)"
-                appendTelegramHistory(role: .assistant, text: fallbackFinalText)
-                return
+            let nonToolText = sanitizeFinalModelText(trimmed)
+            if !nonToolText.isEmpty {
+                lastNonToolModelText = nonToolText
+                toolTrace.append("non_tool_output_ignored")
+                continue
             }
         }
 
-        if fallbackFinalText.isEmpty {
-            let fallbackPrompt = "Reply briefly to this private Telegram message:\n\(normalized)"
-            let fallback = await generateText(
-                prompt: fallbackPrompt,
-                images: [],
-                parameters: .init(temperature: 0.7, topP: 0.95)
-            ).trimmingCharacters(in: .whitespacesAndNewlines)
-
-            if !fallback.isEmpty {
-                let sendResult = await runtime.tlgMessageResponse(chatId: chatId, text: fallback)
-                output = "fallback_reply_sent(\(sendResult))\n\(fallback)"
-                appendTelegramHistory(role: .assistant, text: fallback)
-            }
+        if !lastNonToolModelText.isEmpty {
+            output = "no_tool_response_sent: model returned non-tool text; ignored by policy"
+            print("[MLXSampleApp] Non-tool model output ignored. Only tlg_message_response is allowed to send.")
+        } else {
+            output = "no_tool_response_sent: no valid tool call produced"
+            print("[MLXSampleApp] No valid tool call produced. Nothing sent to Telegram.")
         }
     }
 
@@ -527,11 +524,17 @@ class MLXViewModel {
         case "tlg_message_response":
             let text = toolCall.arguments["text"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !text.isEmpty else { return ToolResultText.missingTextError }
+            guard !isInternalToolTraceText(text) else {
+                return "fail: invalid final message format"
+            }
             return await runtime.tlgMessageResponse(chatId: chatId, text: text)
 
         case "forward_message_to_user":
             let text = toolCall.arguments["text"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !text.isEmpty else { return ToolResultText.missingTextError }
+            if mode == .mock {
+                return "user_response(\(ToolResultText.mockForwardUserResponse))"
+            }
             return await runtime.forwardMessageToUser(chatId: chatId, text: text)
 
         case "get_user_location":
@@ -562,6 +565,16 @@ class MLXViewModel {
         default:
             return "\(ToolResultText.unsupportedToolPrefix) \(toolCall.tool)"
         }
+    }
+
+    private func isInternalToolTraceText(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return lower.contains("tool:") ||
+            lower.contains("arguments:") ||
+            lower.contains("result:") ||
+            lower.contains("```") ||
+            lower.contains("\"tool\"") ||
+            lower.contains("\"arguments\"")
     }
 
     private func appendTelegramHistory(role: ConversationMessage.Role, text: String) {
@@ -601,7 +614,18 @@ class MLXViewModel {
 
         Operating rules:
         - This input came from a Telegram private chat user.
+        - You are an orchestrator. Do not discuss orchestration, simulation, or model internals with the user.
+        - Interpret "you/your" in incoming text as the Telegram account owner (human), not the model.
+        - Never answer with meta-questions like "are you asking me to simulate...".
+        - IMPORTANT: `forward_message_to_user` is a QUESTION to the human owner; it is not a final Telegram answer.
+        - IMPORTANT: `tlg_message_response` is the ONLY tool that sends the final visible answer to Telegram.
+        - `tlg_message_response.text` must be plain user-facing text only (no JSON, no markdown code blocks, no "Tool:", no "Arguments:", no "Result:").
+        - Never put chain-of-thought, reasoning, draft text, status, or internal notes into `tlg_message_response`.
+        - If interrupted or uncertain, do not send anything unless you intentionally call `tlg_message_response`.
+        - When direct info is missing, use tools first (especially `forward_message_to_user`) instead of freeform guessing.
         - If you need to reply to the user, you MUST call `tlg_message_response`.
+        - After `tlg_message_response` returns success, STOP immediately and do not emit any additional response.
+        - Never send duplicate replies for the same user message.
         - Don't treat local app output as a user-visible Telegram reply.
         - Use `forward_message_to_user` only when clarification is needed and a user response is required before finalizing.
         - Use `expand_chat_context` when context is insufficient.
@@ -610,14 +634,20 @@ class MLXViewModel {
         - `FINAL:` is only for internal fallback/debug and should be avoided for normal chat replies.
 
         Available tools (return ONLY JSON with `tool` and `arguments`):
-        1) tlg_message_response { "text": "..." } -> send response in current chat
-        2) forward_message_to_user { "text": "..." } -> ask user to respond and wait; returns dismissed/cancelled/user_response(text)
+        1) tlg_message_response { "text": "..." } -> send FINAL response in current chat (only visible send tool)
+        2) forward_message_to_user { "text": "..." } -> ask the human owner for clarification; returns dismissed/cancelled/user_response(text)
         3) get_user_location {} -> returns location text/coordinates
         4) expand_chat_context { "limit": "15" } -> returns older messages metadata or fail
         5) elaborate_request_to_user { "text": "..." } -> send clearer rephrased ask to user
 
-        Preferred flow: choose tools until response is sent via `tlg_message_response`.
-        If absolutely needed, return FINAL: <assistant reply text>.
+        Practical guidance:
+        - ETA/arrival questions about "you": call `forward_message_to_user` to get the human's answer, then call `tlg_message_response` with that answer.
+        - Location requests: call `get_user_location`, then call `tlg_message_response` with the location.
+        - Missing context: call `expand_chat_context`.
+
+        Preferred flow: choose tools until response is sent via `tlg_message_response`, then stop.
+        Do not output plain prose replies. Return only JSON tool calls.
+        If you cannot decide, use `forward_message_to_user` rather than generating a direct non-tool answer.
 
         Conversation history:
         \(historyBlock)
