@@ -425,7 +425,7 @@ struct ContentView: View {
         if voiceManager.isSpeakingOutLoud {
             return "Speaking..."
         }
-        return "Le Clawd"
+        return "SupaClawd"
     }
 
     private func handleVoiceCircleTap() async {
