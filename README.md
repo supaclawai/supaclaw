@@ -7,8 +7,6 @@
 
 Welcome! This project demonstrates how to run large language models (LLMs) on iOS and macOS devices using the **MLX Swift** framework. It serves as a practical guide through the process of integrating, adding, and running Hugging Face models on your device.
 
-[Demo Link](https://www.youtube.com/watch?v=-N1z4mefUOM)
-
 # About This Project
 
 MLX Swift provides a framework for running machine learning models, including language models, on iOS, macOS, and other platforms. In this project, I’ve developed a sample app that utilizes MLX Swift to load and run LLMs and VLMs from Hugging Face. The app allows you to integrate custom models and test them in a real-world scenario.
