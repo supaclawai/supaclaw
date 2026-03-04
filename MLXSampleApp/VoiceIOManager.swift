@@ -416,7 +416,7 @@ private struct ElevenLabsRequest: Encodable {
 
 private enum Secrets {
     static var mistralAPIKey: String? {
-        "***REMOVED_MISTRAL_API_KEY***"
+        AppSecrets.mistralAPIKey
     }
 
     static var mistralBaseURL: String {
@@ -432,7 +432,7 @@ private enum Secrets {
     }
 
     static var elevenLabsAPIKey: String? {
-        "***REMOVED_ELEVENLABS_API_KEY***"
+        AppSecrets.elevenLabsAPIKey
     }
 
     static var elevenLabsVoiceID: String {
@@ -462,9 +462,9 @@ enum VoiceIOError: LocalizedError {
         case .noRecordingInProgress:
             return "No recording is currently in progress."
         case .missingMistralApiKey:
-            return "Missing MISTRAL_API_KEY. Add it to env vars, test.env, or Info.plist."
+            return "Missing MISTRAL_API_KEY. Add it to env vars, .env, or Info.plist."
         case .missingElevenLabsApiKey:
-            return "Missing ELEVENLABS_API_KEY. Add it to env vars, test.env, or Info.plist."
+            return "Missing ELEVENLABS_API_KEY. Add it to env vars, .env, or Info.plist."
         case .invalidServerResponse:
             return "Invalid response from the speech API."
         case .apiError(let statusCode, let body):

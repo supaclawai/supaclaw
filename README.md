@@ -60,19 +60,21 @@ The app now supports:
 - STT via Mistral Audio Transcriptions (`voxtral-big-latest` by default)
 - TTS via ElevenLabs Text-to-Speech
 
-Configure these values in your Xcode scheme environment variables or app Info.plist keys:
+Configure these values in your local `.env` file (recommended), Xcode scheme environment variables, or app Info.plist keys:
 - `MISTRAL_API_KEY` (required for STT)
 - `MISTRAL_BASE_URL` (optional, default: `https://api.mistral.ai`)
 - `MISTRAL_STT_MODEL` (optional, default: `voxtral-big-latest`)
 - `ELEVENLABS_API_KEY` (required for TTS)
 - `ELEVENLABS_VOICE_ID` (optional, default: `EXAVITQu4vr4xnSDxMaL`)
 - `ELEVENLABS_MODEL_ID` (optional, default: `eleven_multilingual_v2`)
-- Optional: `TEST_ENV_PATH` pointing to a dotenv file (for example your local `test.env`)
+- Optional: `TEST_ENV_PATH` pointing to a dotenv file
+- Optional: `HUGGINGFACE_TOKEN` (or `HF_TOKEN`) for private/gated Hugging Face models
 
-`test.env` auto-loading:
-- The app now attempts to load `test.env` automatically from current working directory.
-- It also loads `test.env` if bundled into the app resources.
+Dotenv auto-loading:
+- The app attempts to load `.env` automatically from current working directory.
+- It also attempts to load `test.env` for backward compatibility.
 - For iOS Simulator/app sandbox reliability, prefer setting `TEST_ENV_PATH` in scheme env vars.
+- Start from `.env.example`, copy it to `.env`, and fill your real keys locally.
 
 Usage in app:
 - Tap mic button to record prompt audio, tap again to transcribe into the prompt field.
