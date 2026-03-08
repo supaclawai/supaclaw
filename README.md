@@ -67,6 +67,8 @@ Configure these values in your local `.env` file (recommended), Xcode scheme env
 - `ELEVENLABS_API_KEY` (required for TTS)
 - `ELEVENLABS_VOICE_ID` (optional, default: `EXAVITQu4vr4xnSDxMaL`)
 - `ELEVENLABS_MODEL_ID` (optional, default: `eleven_multilingual_v2`)
+- `TELEGRAM_API_ID` (optional, seeds the Telegram login field)
+- `TELEGRAM_API_HASH` (optional, seeds the Telegram login field)
 - Optional: `TEST_ENV_PATH` pointing to a dotenv file
 - Optional: `HUGGINGFACE_TOKEN` (or `HF_TOKEN`) for private/gated Hugging Face models
 

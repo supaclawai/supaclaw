@@ -33,9 +33,6 @@ struct ContentView: View {
             .mistralNeMoMinitron8BInstruct4bit
     #endif
 
-    private static let defaultTelegramApiId = "12345678"
-    private static let defaultTelegramApiHash = "00000000000000000000000000000000"
-
     @State private var prompt: String = ""
     @State private var selectedImages: [Data] = []
     @StateObject private var voiceManager = VoiceIOManager()
@@ -516,9 +513,9 @@ struct ContentView: View {
         }
 
         bridge.apiIdText =
-            UserDefaults.standard.string(forKey: "telegram.api_id") ?? Self.defaultTelegramApiId
+            UserDefaults.standard.string(forKey: "telegram.api_id") ?? AppSecrets.telegramAPIId ?? ""
         bridge.apiHash =
-            UserDefaults.standard.string(forKey: "telegram.api_hash") ?? Self.defaultTelegramApiHash
+            UserDefaults.standard.string(forKey: "telegram.api_hash") ?? AppSecrets.telegramAPIHash ?? ""
         bridge.phoneNumber = UserDefaults.standard.string(forKey: "telegram.phone") ?? ""
         bridge.toolDecisionMode = useMockToolMode ? .mock : .llm
         telegramBridge = bridge

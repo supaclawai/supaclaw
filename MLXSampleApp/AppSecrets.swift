@@ -9,6 +9,14 @@ enum AppSecrets {
         value(for: "ELEVENLABS_API_KEY")
     }
 
+    static var telegramAPIId: String? {
+        value(for: "TELEGRAM_API_ID")
+    }
+
+    static var telegramAPIHash: String? {
+        value(for: "TELEGRAM_API_HASH")
+    }
+
     static var huggingFaceToken: String {
         value(for: "HUGGINGFACE_TOKEN") ?? value(for: "HF_TOKEN") ?? ""
     }
